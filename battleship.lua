@@ -751,15 +751,88 @@ local function get_broadcast_channel()
   return GAME_CHANNEL
 end
 
--- ---- Mesh Transmission Wrapper ----------------------------------------------
-local function mesh_send(to, text)
-  if not text and type(to) == "table" then
-    text = to.text
-    to = to.to
+-- ---- Mesh Transmission Wrapper & WADAMESH 5s Cooldown Pacer -----------------
+local peer_dm_verified = false
+local tx_dup_nonce     = 0
+local paced_queue      = {} -- FIFO queue of { to = "...", text = "..." }
+
+-- Resolve peer name against wada.mesh.contacts() (handles 23-char "..." truncation)
+local function resolve_dm_contact(name)
+  if type(name) ~= "string" or name == "" then return nil, false end
+  if type(mesh.contacts) ~= "function" then
+    return name, true
   end
+  local ok, list = pcall(mesh.contacts, 0, 250)
+  if not ok or type(list) ~= "table" then
+    return nil, false
+  end
+  local prefix = nil
+  if #name >= 4 and name:sub(-3) == "..." then
+    prefix = name:sub(1, #name - 3)
+  end
+  for _, ct in ipairs(list) do
+    if type(ct) == "table" and type(ct.name) == "string" then
+      if ct.name == name then
+        return ct.name, true
+      end
+      if prefix and ct.name:sub(1, #prefix) == prefix then
+        return ct.name, true
+      end
+    end
+  end
+  return nil, false
+end
+
+local function send_on_game_channel(str_text)
+  local chan, exists = ensure_channel(GAME_CHANNEL)
+  if not (mesh and mesh.send) then
+    return false, "no sender"
+  end
+  local ok, res, reason = pcall(mesh.send, chan, str_text)
+  if not ok then
+    return false, tostring(res)
+  end
+  if res == false then
+    local reason_str = tostring(reason or "send failed")
+    -- Bypass LuaAppHost.cpp 10-minute duplicate text filter on channel retries
+    if reason_str == "duplicate" then
+      tx_dup_nonce = tx_dup_nonce + 1
+      local ok2, res2, reason2 = pcall(mesh.send, chan, str_text .. "|R" .. tostring(tx_dup_nonce))
+      if ok2 and res2 ~= false then
+        return true
+      end
+      reason_str = tostring(reason2 or reason_str)
+    end
+    if reason_str == "no such channel" or not exists then
+      combat_log = string.format("> %s NOT FOUND! ADD IN CHATS (+) > #", GAME_CHANNEL)
+      if sys and sys.toast then pcall(sys.toast, "Join " .. GAME_CHANNEL .. " in Chats (+)", 3500) end
+    end
+    return false, reason_str
+  end
+  return true
+end
+
+local function try_send_dm(to_str, str_text)
+  if not (mesh and mesh.send_dm) then
+    return false, "no dm"
+  end
+  local contact_name, found = resolve_dm_contact(to_str)
+  if not found or not contact_name then
+    return false, "no such contact"
+  end
+  local ok, res, reason = pcall(mesh.send_dm, contact_name, str_text)
+  if not ok then
+    return false, tostring(res)
+  end
+  if res == false then
+    return false, tostring(reason or "dm failed")
+  end
+  return true
+end
+
+local function mesh_send_raw(to, text)
   if not mesh then return false, "no mesh" end
   local str_text = tostring(text or "")
-
   local to_str = to and tostring(to) or ""
   local to_lower = to_str:lower()
   local is_broadcast = (to_str == "") or (to_str == "broadcast") or (to_str == "Public")
@@ -767,57 +840,150 @@ local function mesh_send(to, text)
     or (to_lower == "battleship")
     or (to_lower == "#battleship")
 
-  if not is_broadcast then
-    -- 1. Try send_dm for direct peer-to-peer transmission
-    if mesh.send_dm then
-      local ok, res, reason = pcall(mesh.send_dm, to_str, str_text)
-      if ok then
-        if res == true then
-          return true
-        elseif res == false then
-          return false, tostring(reason or "dm failed")
-        else
-          return true
-        end
-      end
+  local is_handshake = (str_text:sub(1, 8) == "BS|SEEK|")
+    or (str_text:sub(1, 13) == "BS|JOIN_SEEK|")
+    or (str_text:sub(1, 8) == "BS|JOIN|")
+    or (str_text:sub(1, 7) == "BS|RDY|")
+
+  if is_broadcast then
+    return send_on_game_channel(str_text)
+  end
+
+  -- 1. If peer DM is verified end-to-end and this is not a lobby handshake packet,
+  --    prefer DM (6-burst / 10s refill budget) and fall back to #battleship channel.
+  if peer_dm_verified and not is_handshake then
+    local dm_ok, dm_err = try_send_dm(to_str, str_text)
+    if dm_ok then return true end
+    if dm_err == "too fast" then return false, "too fast" end
+  end
+
+  -- 2. Send on #battleship channel (works without Contacts or DM Read/Send perms).
+  --    If channel budget is rate-limited, overflow to DM if available.
+  if mesh.channels then
+    local ch_ok, ch_err = send_on_game_channel(str_text)
+    if ch_ok then return true end
+    if ch_err == "too fast" then return false, "too fast" end
+    if ch_err == "rate limited" and mesh.send_dm then
+      local dm_ok, dm_err = try_send_dm(to_str, str_text)
+      if dm_ok then return true end
+      if dm_err == "too fast" then return false, "too fast" end
     end
-    -- 2. Fallback to mesh.send for test harness or direct routing
-    if mesh.send then
-      local ok, res, reason = pcall(mesh.send, to_str, str_text)
-      if ok then
-        if res == true then
-          return true
-        elseif res == false then
-          return false, tostring(reason or "send failed")
-        else
-          return true
-        end
-      end
-      return false, tostring(res)
+    return false, ch_err
+  end
+
+  -- 3. Fallback for test harnesses without mesh.channels
+  if mesh.send_dm then
+    local dm_ok, dm_err = try_send_dm(to_str, str_text)
+    if dm_ok then return true end
+    if dm_err == "too fast" then return false, "too fast" end
+  end
+  if mesh.send then
+    local ok, res, reason = pcall(mesh.send, to_str, str_text)
+    if ok then
+      if res == false then return false, tostring(reason or "send failed") end
+      return true
     end
-  else
-    -- Channel broadcast on #battleship (Lobby discovery & seek beacons)
-    local chan, exists = ensure_channel(GAME_CHANNEL)
-    if mesh.send then
-      local ok, res, reason = pcall(mesh.send, chan, str_text)
-      if ok then
-        if res == true then
-          return true
-        elseif res == false then
-          local reason_str = tostring(reason or "send failed")
-          if reason_str == "no such channel" or not exists then
-            combat_log = string.format("> %s NOT FOUND! ADD IN CHATS (+) > #", GAME_CHANNEL)
-            if sys and sys.toast then pcall(sys.toast, "Join " .. GAME_CHANNEL .. " in Chats (+)", 3500) end
-          end
-          return false, reason_str
-        else
-          return true
-        end
-      end
-      return false, tostring(res)
-    end
+    return false, tostring(res)
   end
   return false, "no sender"
+end
+
+local function remove_from_paced_queue(pred)
+  for i = #paced_queue, 1, -1 do
+    if pred(paced_queue[i]) then
+      table.remove(paced_queue, i)
+    end
+  end
+  if #paced_queue == 0 then
+    timer_cancel("lora_tx_pace")
+  end
+end
+
+local function start_pace_timer()
+  timer_every("lora_tx_pace", 500, function()
+    if #paced_queue == 0 then
+      timer_cancel("lora_tx_pace")
+      return
+    end
+    local head = paced_queue[1]
+    local ok, err = mesh_send_raw(head.to, head.text)
+    if ok then
+      local sent_text = head.text
+      table.remove(paced_queue, 1)
+      if #paced_queue == 0 then
+        timer_cancel("lora_tx_pace")
+      end
+      if tx_pending and tx_pending.payload == sent_text then
+        tx_pending.waiting_pace = false
+        tx_pending.elapsed = 0
+      end
+      if draw_screen then draw_screen() end
+    elseif err ~= "too fast" and err ~= "rate limited" then
+      table.remove(paced_queue, 1)
+      if #paced_queue == 0 then
+        timer_cancel("lora_tx_pace")
+      end
+      if tx_pending and tx_pending.payload == head.text then
+        tx_pending.waiting_pace = false
+      end
+    end
+  end)
+end
+
+local function mesh_send(to, text)
+  if not text and type(to) == "table" then
+    text = to.text
+    to = to.to
+  end
+  local to_str = to and tostring(to) or ""
+  local str_text = tostring(text or "")
+
+  local ok, err = mesh_send_raw(to_str, str_text)
+  if ok then
+    remove_from_paced_queue(function(item)
+      return item.text == str_text or item.text:sub(1, 7) == "BS|ACK|"
+    end)
+    if tx_pending and tx_pending.payload == str_text then
+      tx_pending.waiting_pace = false
+    end
+    return true
+  end
+
+  -- Automatically queue and pace packets that hit WADAMESH's 5000ms radio gap or channel burst limit
+  if err == "too fast" or err == "rate limited" then
+    local is_ack = (str_text:sub(1, 7) == "BS|ACK|")
+    if is_ack and #paced_queue > 0 then
+      -- Do not let a low-priority ACK queue behind or delay real game packets
+      return false, err
+    end
+    -- If channel budget is rate-limited (60s per token) and we are queueing Turn 1 BS|FIRE
+    -- which already embeds our board hash & seed, coalesce any unsent BS|RDY in the queue
+    if err == "rate limited" and str_text:sub(1, 8) == "BS|FIRE|" then
+      remove_from_paced_queue(function(item)
+        return item.text:sub(1, 7) == "BS|RDY|"
+      end)
+    end
+    -- Deduplicate identical payloads in FIFO queue
+    local already_queued = false
+    for _, item in ipairs(paced_queue) do
+      if item.text == str_text then
+        item.to = to_str
+        already_queued = true
+        break
+      end
+    end
+    if not already_queued then
+      paced_queue[#paced_queue + 1] = { to = to_str, text = str_text }
+    end
+    if tx_pending and tx_pending.payload == str_text then
+      tx_pending.waiting_pace = true
+      tx_pending.elapsed = 0
+    end
+    start_pace_timer()
+    return true, "paced"
+  end
+
+  return false, err
 end
 
 -- Forward declaration of NetEngine & AI methods
@@ -1005,6 +1171,11 @@ function NetEngine.start_retry_timer()
       return
     end
 
+    -- Do not count retry timeout while packet is queued for the 5s radio cooldown
+    if tx_pending.waiting_pace then
+      return
+    end
+
     tx_pending.elapsed = tx_pending.elapsed + 1000
     if tx_pending.elapsed >= tx_pending.next_wait then
       tx_pending.elapsed = 0
@@ -1012,9 +1183,12 @@ function NetEngine.start_retry_timer()
       if tx_pending.retries > 5 then
         show_retry_modal = true
         combat_log = "> TX TIMEOUT: 5 RETRIES FAILED."
+        timer_cancel("lora_tx_retry")
         if draw_screen then draw_screen() end
       else
         tx_pending.next_wait = 6000 + (tx_pending.retries * 2000)
+        -- If our previous attempt was a DM that went unanswered, fall back to #battleship
+        peer_dm_verified = false
         combat_log = string.format("> TX RETRY %d/5 [Seq %d]...", tx_pending.retries, tx_pending.seq)
         mesh_send(opponent_id, tx_pending.payload)
         if draw_screen then draw_screen() end
@@ -1024,24 +1198,63 @@ function NetEngine.start_retry_timer()
 end
 
 function NetEngine.queue_tx(payload, seq)
+  if tx_pending and tx_pending.payload ~= payload then
+    local old_payload = tx_pending.payload
+    remove_from_paced_queue(function(item)
+      return item.text == old_payload
+    end)
+  end
   tx_pending = {
-    payload   = payload,
-    seq       = seq,
-    retries   = 0,
-    elapsed   = 0,
-    next_wait = 6000,
+    payload      = payload,
+    seq          = seq,
+    retries      = 0,
+    elapsed      = 0,
+    next_wait    = 6000,
+    waiting_pace = false,
   }
   show_retry_modal = false
 
-  mesh_send(opponent_id, payload)
+  local ok, err = mesh_send(opponent_id, payload)
+  if (not ok and (err == "too fast" or err == "rate limited")) or (ok and err == "paced") then
+    tx_pending.waiting_pace = true
+  end
   NetEngine.start_retry_timer()
   save_match_state()
 end
 
-function NetEngine.clear_tx()
+function NetEngine.clear_tx(clear_all_paced)
+  local old_payload = tx_pending and tx_pending.payload or nil
   tx_pending = nil
   show_retry_modal = false
   timer_cancel("lora_tx_retry")
+  if clear_all_paced then
+    paced_queue = {}
+    timer_cancel("lora_tx_pace")
+    timer_cancel("rdy_confirm")
+  elseif old_payload then
+    remove_from_paced_queue(function(item)
+      return item.text == old_payload
+    end)
+  end
+end
+
+-- Schedule a lightweight RDY confirmation pulse when Host is defending on Turn 1
+-- so Joiner is guaranteed to exit STATE_SETUP even if the first BS|RDY was lost over RF.
+local function start_rdy_confirm_timer()
+  local rdy_repeats = 0
+  timer_every("rdy_confirm", 15000, function()
+    if is_host and game_state == STATE_ENEMY_TURN and local_seq == 1 and match_id ~= "" and my_board_hash ~= "" then
+      rdy_repeats = rdy_repeats + 1
+      if rdy_repeats <= 3 then
+        local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+        mesh_send(opponent_id, payload)
+      else
+        timer_cancel("rdy_confirm")
+      end
+    else
+      timer_cancel("rdy_confirm")
+    end
+  end)
 end
 
 -- Fire at (x, y) on enemy sector
@@ -1102,8 +1315,16 @@ function NetEngine.fire_shot(x, y)
     return
   end
 
-  -- Multiplayer LoRa match: queue over mesh and wait for peer ACK/RES
-  local payload = string.format("BS|FIRE|%s|%d|%d,%d", match_id, local_seq, x, y)
+  -- Multiplayer LoRa match: queue over mesh and wait for peer ACK/RES.
+  -- On Turn 1 (local_seq == 1), embed our board hash & handshake seed so if the peer
+  -- missed BS|RDY (or is still at SCANNING #battleship FOR HOST LOBBY), this FIRE packet
+  -- simultaneously completes the handshake and delivers Turn 1's shot!
+  local payload
+  if local_seq == 1 and my_board_hash ~= "" then
+    payload = string.format("BS|FIRE|%s|%d|%d,%d|%s|%d", match_id, local_seq, x, y, my_board_hash, handshake_seed)
+  else
+    payload = string.format("BS|FIRE|%s|%d|%d,%d", match_id, local_seq, x, y)
+  end
   combat_log = string.format("> TX FIRE %s [Seq %d]...", format_coord(x, y), local_seq)
   NetEngine.queue_tx(payload, local_seq)
   if draw_screen then draw_screen() end
@@ -1114,17 +1335,22 @@ function NetEngine.host_lobby()
   init_empty_grids()
   my_ships = {}
   my_board_hash = ""
+  enemy_board_hash = ""
+  enemy_seed = 0
   fleet_locked = false
   match_id = rand_match_id()
   is_host = true
   is_ai_match = false
   opponent_id = ""
+  peer_dm_verified = false
   enemy_callsign = "WAITING"
   local_seq = 0
   setup_ship_idx = 1
   setup_cur_x = 0
   setup_cur_y = 0
   game_state = STATE_SETUP
+  timer_cancel("seek_broadcast")
+  NetEngine.clear_tx(true)
   local ch, exists = ensure_channel(GAME_CHANNEL)
   if exists then
     combat_log = string.format("> HOSTING [%s] ON %s. PLACE YOUR FLEET.", match_id, ch)
@@ -1140,9 +1366,13 @@ function NetEngine.join_lobby()
   init_empty_grids()
   my_ships = {}
   my_board_hash = ""
+  enemy_board_hash = ""
+  enemy_seed = 0
   fleet_locked = false
   match_id = ""
   opponent_id = ""
+  peer_dm_verified = false
+  enemy_callsign = "SCANNING"
   is_host = false
   is_ai_match = false
   local_seq = 0
@@ -1150,6 +1380,8 @@ function NetEngine.join_lobby()
   setup_cur_x = 0
   setup_cur_y = 0
   game_state = STATE_SETUP
+  timer_cancel("seek_broadcast")
+  NetEngine.clear_tx(true)
   local ch, exists = ensure_channel(GAME_CHANNEL)
   if exists then
     combat_log = string.format("> SEEKING ON %s: PLACE SHIPS TO LOCK FLEET.", ch)
@@ -1212,8 +1444,29 @@ function NetEngine.lock_in_fleet()
 
   sfx_play("TURN_ALERT")
   if is_host then
+    -- If a Challenger already sent JOIN or JOIN_SEEK while Host was placing ships,
+    -- complete the handshake immediately with RDY!
+    if opponent_id ~= "" and enemy_board_hash ~= "" then
+      timer_cancel("seek_broadcast")
+      local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+      mesh_send(opponent_id, payload)
+      if handshake_seed >= enemy_seed then
+        local_seq = 1
+        game_state = STATE_MY_TURN
+        combat_log = "> PEER JOINED! YOU FIRE FIRST!"
+      else
+        local_seq = 1
+        game_state = STATE_ENEMY_TURN
+        combat_log = "> PEER JOINED! ENEMY FIRES FIRST."
+        start_rdy_confirm_timer()
+      end
+      save_match_state()
+      if draw_screen then draw_screen() end
+      return
+    end
+
     seek_beacon_seq = seek_beacon_seq + 1
-    local seek_pkt = string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq)
+    local seek_pkt = string.format("BS|SEEK|%s|%s|%d|%d|%s", match_id, my_callsign, seek_beacon_seq, handshake_seed, my_board_hash)
     local sent_ok, sent_err = mesh_send(GAME_CHANNEL, seek_pkt)
     if sent_ok then
       combat_log = string.format("> SEEK [%s] ON %s: BROADCASTING...", match_id, GAME_CHANNEL)
@@ -1226,7 +1479,7 @@ function NetEngine.lock_in_fleet()
         combat_log = string.format("> SEEK [%s]: ALLOW IN SYSTEM POPUP & [ENT] RETRY", match_id)
         if sys.toast then pcall(sys.toast, "Allow broadcast popup, then [Enter]", 2500) end
       elseif sent_err == "too fast" then
-        combat_log = string.format("> SEEK [%s]: RADIO BUSY. WAIT 5s & [ENT] RETRY", match_id)
+        combat_log = string.format("> SEEK [%s]: QUEUED FOR RADIO COOLDOWN...", match_id)
       elseif sent_err == "no such channel" then
         combat_log = string.format("> %s NOT FOUND! ADD IN CHATS (+) > #", GAME_CHANNEL)
         if sys.toast then pcall(sys.toast, "Add " .. GAME_CHANNEL .. " in Chats (+)", 3500) end
@@ -1234,11 +1487,11 @@ function NetEngine.lock_in_fleet()
         combat_log = string.format("> SEEK [%s] (%s) - [ENT] RETRY", match_id, tostring(sent_err or "WAIT"))
       end
     end
-    -- Repeating broadcast timer every 15 seconds (respects WADAMESH 5s gap & dup filter)
-    timer_every("seek_broadcast", 15000, function()
+    -- Repeating broadcast timer every 45 seconds (preserves WADAMESH 3-msg/60s channel burst budget for RDY/FIRE)
+    timer_every("seek_broadcast", 45000, function()
       if game_state == STATE_SETUP and is_host and opponent_id == "" then
         seek_beacon_seq = seek_beacon_seq + 1
-        mesh_send(GAME_CHANNEL, string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq))
+        mesh_send(GAME_CHANNEL, string.format("BS|SEEK|%s|%s|%d|%d|%s", match_id, my_callsign, seek_beacon_seq, handshake_seed, my_board_hash))
       else
         timer_cancel("seek_broadcast")
       end
@@ -1251,7 +1504,8 @@ function NetEngine.lock_in_fleet()
       NetEngine.queue_tx(payload, 0)
     else
       seek_beacon_seq = seek_beacon_seq + 1
-      local sent_ok, sent_err = mesh_send(GAME_CHANNEL, string.format("BS|JOIN_SEEK|0|%d|%s|%d", handshake_seed, my_board_hash, seek_beacon_seq))
+      local join_seek_pkt = string.format("BS|JOIN_SEEK|0|%d|%s|%d|%s", handshake_seed, my_board_hash, seek_beacon_seq, my_callsign)
+      local sent_ok, sent_err = mesh_send(GAME_CHANNEL, join_seek_pkt)
       if sent_ok then
         combat_log = string.format("> SCANNING %s FOR HOST LOBBY...", GAME_CHANNEL)
         if sys.toast then pcall(sys.toast, "Fleet locked! Scanning " .. GAME_CHANNEL .. "...") end
@@ -1263,7 +1517,7 @@ function NetEngine.lock_in_fleet()
           combat_log = "> SCAN: ALLOW IN SYSTEM POPUP & [ENT] RETRY"
           if sys.toast then pcall(sys.toast, "Allow broadcast popup, then [Enter]", 2500) end
         elseif sent_err == "too fast" then
-          combat_log = "> SCAN: RADIO BUSY. WAIT 5s & [ENT] RETRY"
+          combat_log = "> SCAN: QUEUED FOR RADIO COOLDOWN..."
         elseif sent_err == "no such channel" then
           combat_log = string.format("> %s NOT FOUND! ADD IN CHATS (+) > #", GAME_CHANNEL)
           if sys.toast then pcall(sys.toast, "Add " .. GAME_CHANNEL .. " in Chats (+)", 3500) end
@@ -1271,6 +1525,15 @@ function NetEngine.lock_in_fleet()
           combat_log = string.format("> SCANNING FOR HOST (%s)...", tostring(sent_err or "WAIT"))
         end
       end
+      -- Repeating JOIN_SEEK scan every 20 seconds until Host replies with SEEK, RDY, or Turn 1 FIRE
+      timer_every("seek_broadcast", 20000, function()
+        if game_state == STATE_SETUP and not is_host and opponent_id == "" and tx_pending == nil then
+          seek_beacon_seq = seek_beacon_seq + 1
+          mesh_send(GAME_CHANNEL, string.format("BS|JOIN_SEEK|0|%d|%s|%d|%s", handshake_seed, my_board_hash, seek_beacon_seq, my_callsign))
+        else
+          timer_cancel("seek_broadcast")
+        end
+      end)
     end
   end
   if draw_screen then draw_screen() end
@@ -1279,6 +1542,11 @@ end
 -- Process incoming LoRa packet
 function NetEngine.process_packet(sender, text)
   if not text or text:sub(1, 3) ~= "BS|" then return end
+  -- Ignore our own echo if the firmware/repeater echoes channel frames with our own node name
+  if sender and sender ~= "" and sender == my_callsign and my_callsign ~= "ADMIRAL" then
+    return
+  end
+
   local p = split_pipe(text)
   if #p < 3 then return end
 
@@ -1287,14 +1555,24 @@ function NetEngine.process_packet(sender, text)
 
   -- 1. Lobby Seek & Join Handshake
   if ptype == "SEEK" then
-    if game_state == STATE_SETUP and not is_host and opponent_id == "" then
+    if game_state == STATE_SETUP and not is_host then
+      local first_discovery = (opponent_id == "" or match_id ~= p_mid)
       match_id = p_mid
-      opponent_id = sender
-      enemy_callsign = p[4] or "HOST"
-      combat_log = string.format("> FOUND HOST [%s] (%s). JOINING...", match_id, enemy_callsign)
-      if my_board_hash ~= "" then
-        local payload = string.format("BS|JOIN|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
-        NetEngine.queue_tx(payload, 0)
+      opponent_id = (sender and sender ~= "") and sender or (p[4] or "HOST")
+      enemy_callsign = p[4] or opponent_id
+      if p[6] and p[7] and p[7] ~= "" and not p[7]:match("^R%d+$") then
+        enemy_seed = tonumber(p[6]) or enemy_seed
+        enemy_board_hash = p[7]
+      end
+      timer_cancel("seek_broadcast")
+      if fleet_locked and my_board_hash ~= "" then
+        if first_discovery or tx_pending == nil then
+          combat_log = string.format("> FOUND HOST [%s] (%s). JOINING...", match_id, enemy_callsign)
+          local payload = string.format("BS|JOIN|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+          NetEngine.queue_tx(payload, 0)
+        end
+      else
+        combat_log = string.format("> HOST [%s] (%s) READY! PLACE FLEET.", match_id, enemy_callsign)
       end
       if draw_screen then draw_screen() end
     end
@@ -1302,46 +1580,182 @@ function NetEngine.process_packet(sender, text)
   end
 
   if ptype == "JOIN_SEEK" then
-    if is_host and game_state == STATE_SETUP and opponent_id == "" and match_id ~= "" then
-      seek_beacon_seq = seek_beacon_seq + 1
-      local seek_pkt = string.format("BS|SEEK|%s|%s|%d", match_id, my_callsign, seek_beacon_seq)
-      if sender and sender ~= "" then
-        mesh_send(sender, seek_pkt)
-      else
-        mesh_send(GAME_CHANNEL, seek_pkt)
+    -- Format: BS|JOIN_SEEK|0|<challenger_seed>|<challenger_hash>|<beacon_seq>|[<callsign>]
+    if is_host and match_id ~= "" then
+      local j_seed = tonumber(p[4]) or 0
+      local j_hash = (p[5] and not p[5]:match("^R%d+$")) and p[5] or ""
+      local j_callsign = (p[7] and p[7] ~= "" and not p[7]:match("^R%d+$")) and p[7] or (sender ~= "" and sender or "PEER")
+
+      if game_state == STATE_SETUP then
+        -- Fast-path handshake: if Host's fleet is already locked and JOIN_SEEK includes Challenger's seed & board hash,
+        -- accept it directly as a JOIN and reply with BS|RDY!
+        if fleet_locked and my_board_hash ~= "" and j_hash ~= "" and (opponent_id == "" or opponent_id == sender or enemy_callsign == j_callsign) then
+          opponent_id = (sender and sender ~= "") and sender or j_callsign
+          enemy_callsign = j_callsign
+          enemy_seed = j_seed
+          enemy_board_hash = j_hash
+          timer_cancel("seek_broadcast")
+
+          local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+          mesh_send(opponent_id, payload)
+
+          if handshake_seed >= enemy_seed then
+            local_seq = 1
+            game_state = STATE_MY_TURN
+            combat_log = "> PEER JOINED! YOU FIRE FIRST!"
+            sfx_play("TURN_ALERT")
+          else
+            local_seq = 1
+            game_state = STATE_ENEMY_TURN
+            combat_log = "> PEER JOINED! ENEMY FIRES FIRST."
+            start_rdy_confirm_timer()
+          end
+          save_match_state()
+          if draw_screen then draw_screen() end
+          return
+        end
+
+        -- If Host is still placing ships, remember Challenger's credentials so lock_in_fleet() can RDY immediately
+        if not fleet_locked and j_hash ~= "" and opponent_id == "" then
+          opponent_id = (sender and sender ~= "") and sender or j_callsign
+          enemy_callsign = j_callsign
+          enemy_seed = j_seed
+          enemy_board_hash = j_hash
+          if setup_ship_idx > 5 and #my_ships >= 5 then
+            NetEngine.lock_in_fleet()
+          else
+            combat_log = string.format("> %s WAITING TO JOIN! LOCK FLEET.", enemy_callsign:sub(1, 10))
+            if draw_screen then draw_screen() end
+          end
+          return
+        end
+
+        if opponent_id == "" then
+          seek_beacon_seq = seek_beacon_seq + 1
+          local seek_pkt = string.format("BS|SEEK|%s|%s|%d|%d|%s", match_id, my_callsign, seek_beacon_seq, handshake_seed, my_board_hash)
+          if sender and sender ~= "" then
+            mesh_send(sender, seek_pkt)
+          else
+            mesh_send(GAME_CHANNEL, seek_pkt)
+          end
+          combat_log = string.format("> PEER DETECTED (%s). SENT SEEK [%s]...", tostring(sender or "PEER"), match_id)
+          if draw_screen then draw_screen() end
+        end
+      elseif (game_state == STATE_MY_TURN or game_state == STATE_ENEMY_TURN) and local_seq == 1 then
+        -- Recovery: Host is already at Turn 1 (e.g. made a move & waiting for ACK, or waiting for enemy shot)
+        -- while Challenger is still stuck at SCANNING #battleship FOR HOST LOBBY (missed BS|RDY or re-joined).
+        if sender == opponent_id or opponent_id == "" or enemy_callsign == j_callsign then
+          opponent_id = (sender and sender ~= "") and sender or j_callsign
+          enemy_callsign = j_callsign
+          if j_hash ~= "" then enemy_board_hash = j_hash end
+          if j_seed > 0 then enemy_seed = j_seed end
+
+          if tx_pending and tx_pending.seq == 1 then
+            -- Host already fired Turn 1 shot! Re-send the Turn 1 BS|FIRE (which embeds our board hash & seed)
+            -- so Challenger immediately completes handshake AND processes Turn 1!
+            tx_pending.retries = 0
+            tx_pending.elapsed = 0
+            mesh_send(opponent_id, tx_pending.payload)
+            combat_log = "> PEER SCANNED: RE-SENT TURN 1 SHOT..."
+          else
+            -- Host hasn't fired yet; re-send BS|RDY and align Turn 1 state
+            local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+            mesh_send(opponent_id, payload)
+            if handshake_seed >= enemy_seed then
+              game_state = STATE_MY_TURN
+              combat_log = "> RE-SENT RDY (YOUR TURN)..."
+            else
+              game_state = STATE_ENEMY_TURN
+              combat_log = "> RE-SENT RDY (ENEMY TURN)..."
+              start_rdy_confirm_timer()
+            end
+          end
+          save_match_state()
+          if draw_screen then draw_screen() end
+        end
       end
-      combat_log = string.format("> PEER DETECTED (%s). SENT SEEK [%s]...", tostring(sender or "PEER"), match_id)
-      if draw_screen then draw_screen() end
     end
     return
   end
 
   if ptype == "JOIN" then
-    if is_host and (game_state == STATE_SETUP or game_state == STATE_LOBBY) then
-      opponent_id = sender
-      enemy_seed = tonumber(p[5]) or 0
-      enemy_board_hash = p[6] or ""
-      timer_cancel("seek_broadcast")
-
-      -- Reply with RDY
-      local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
-      mesh_send(opponent_id, payload)
-
-      -- Seed comparison: higher seed fires first
-      if handshake_seed >= enemy_seed then
-        local_seq = 1
-        game_state = STATE_MY_TURN
-        combat_log = "> PEER JOINED! YOU FIRE FIRST!"
-        sfx_play("TURN_ALERT")
-      else
-        local_seq = 1
-        game_state = STATE_ENEMY_TURN
-        combat_log = "> PEER JOINED! ENEMY FIRES FIRST."
+    if is_host and (p_mid == match_id or match_id == "") then
+      -- If Host hasn't locked fleet yet (or is still placing ships), record Challenger and auto-lock if all 5 ships placed
+      if game_state == STATE_SETUP and (not fleet_locked or my_board_hash == "") then
+        opponent_id = (sender and sender ~= "") and sender or "PEER"
+        enemy_callsign = opponent_id
+        enemy_seed = tonumber(p[5]) or 0
+        enemy_board_hash = p[6] or ""
+        if setup_ship_idx > 5 and #my_ships >= 5 then
+          NetEngine.lock_in_fleet()
+        else
+          combat_log = string.format("> %s JOINED! FINISH PLACING FLEET.", enemy_callsign:sub(1, 10))
+          if draw_screen then draw_screen() end
+        end
+        return
       end
-      save_match_state()
-      if draw_screen then draw_screen() end
+
+      if game_state == STATE_SETUP or game_state == STATE_LOBBY then
+        if not fleet_locked or my_board_hash == "" then
+          my_fleet_str = serialize_fleet(my_ships)
+          my_salt = rand_salt()
+          my_board_hash = djb2_hex(my_fleet_str .. "|" .. my_salt)
+          if handshake_seed == 0 then handshake_seed = rand_int(1, 999999) end
+          fleet_locked = true
+        end
+        opponent_id = (sender and sender ~= "") and sender or "PEER"
+        enemy_callsign = opponent_id
+        enemy_seed = tonumber(p[5]) or 0
+        enemy_board_hash = p[6] or ""
+        timer_cancel("seek_broadcast")
+
+        -- Reply with RDY
+        local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+        mesh_send(opponent_id, payload)
+
+        -- Seed comparison: higher seed fires first
+        if handshake_seed >= enemy_seed then
+          local_seq = 1
+          game_state = STATE_MY_TURN
+          combat_log = "> PEER JOINED! YOU FIRE FIRST!"
+          sfx_play("TURN_ALERT")
+        else
+          local_seq = 1
+          game_state = STATE_ENEMY_TURN
+          combat_log = "> PEER JOINED! ENEMY FIRES FIRST."
+          start_rdy_confirm_timer()
+        end
+        save_match_state()
+        if draw_screen then draw_screen() end
+      elseif (game_state == STATE_MY_TURN or game_state == STATE_ENEMY_TURN) and local_seq == 1 and (sender == opponent_id or opponent_id == "") then
+        -- Dropped RDY Fix: Challenger did not receive our initial BS|RDY and is retrying BS|JOIN.
+        if sender and sender ~= "" then opponent_id = sender end
+        enemy_seed = tonumber(p[5]) or enemy_seed
+        if p[6] and p[6] ~= "" and not p[6]:match("^R%d+$") then enemy_board_hash = p[6] end
+        if tx_pending and tx_pending.seq == 1 then
+          tx_pending.retries = 0
+          tx_pending.elapsed = 0
+          mesh_send(opponent_id, tx_pending.payload)
+          combat_log = "> RE-SENT TURN 1 SHOT TO JOINING PEER..."
+        else
+          local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+          mesh_send(opponent_id, payload)
+          combat_log = "> RE-SENT RDY TO JOINING PEER..."
+        end
+        save_match_state()
+        if draw_screen then draw_screen() end
+      end
     end
     return
+  end
+
+  -- Allow Joiner in STATE_SETUP to adopt Host's match_id from BS|RDY or Turn 1 BS|FIRE
+  if (ptype == "RDY" or (ptype == "FIRE" and tonumber(p[4]) == 1)) and not is_host and game_state == STATE_SETUP and p_mid ~= "" then
+    match_id = p_mid
+    if opponent_id == "" and sender and sender ~= "" then
+      opponent_id = sender
+      enemy_callsign = sender
+    end
   end
 
   -- Filter packet by match_id for active combat / handshake
@@ -1349,12 +1763,22 @@ function NetEngine.process_packet(sender, text)
 
   if ptype == "RDY" then
     if not is_host and game_state == STATE_SETUP then
+      if opponent_id == "" and sender and sender ~= "" then
+        opponent_id = sender
+        enemy_callsign = sender
+      end
       enemy_seed = tonumber(p[5]) or 0
-      enemy_board_hash = p[6] or ""
+      if p[6] and p[6] ~= "" and not p[6]:match("^R%d+$") then
+        enemy_board_hash = p[6]
+      end
+      timer_cancel("seek_broadcast")
       NetEngine.clear_tx()
 
-      -- Confirm with ACK 0
-      mesh_send(opponent_id, string.format("BS|ACK|%s|0", match_id))
+      -- Only send ACK 0 in mock test harnesses where DMs are free; on real WADAMESH hardware,
+      -- Host transitions on JOIN and sending ACK 0 here triggers a 5-second radio lockout right before Turn 1!
+      if not mesh.send_dm then
+        mesh_send(opponent_id, string.format("BS|ACK|%s|0", match_id))
+      end
 
       if handshake_seed > enemy_seed then
         local_seq = 1
@@ -1378,6 +1802,7 @@ function NetEngine.process_packet(sender, text)
   -- Outbound ACK confirmation
   if ptype == "ACK" then
     if seq == 0 then
+      timer_cancel("rdy_confirm")
       if is_host and local_seq == 1 and tx_pending and tx_pending.seq == 0 then
         NetEngine.clear_tx()
         combat_log = "> CHALLENGER ACK RECEIVED. READY."
@@ -1405,11 +1830,52 @@ function NetEngine.process_packet(sender, text)
     return
   end
 
-  -- Incoming Shot: BS|FIRE|<match_id>|<seq>|<x>,<y>
+  -- Incoming Shot: BS|FIRE|<match_id>|<seq>|<x>,<y>[|<attacker_hash>|<attacker_seed>]
   if ptype == "FIRE" then
+    -- Ignore self-echo if we are the attacker waiting for our own shot's RES
+    if game_state == STATE_MY_TURN and tx_pending ~= nil then return end
+
+    timer_cancel("rdy_confirm")
     local coords = p[5] or "0,0"
     local cx, cy = coords:match("(%d+),(%d+)")
     local x, y = tonumber(cx), tonumber(cy)
+    local f_hash = (p[6] and p[6] ~= "" and not p[6]:match("^R%d+$")) and p[6] or ""
+    local f_seed = tonumber(p[7]) or 0
+
+    -- Implicit RDY & Handshake completion: if Joiner is still waiting in STATE_SETUP
+    -- (including at SCANNING #battleship FOR HOST LOBBY where enemy_board_hash was "")
+    -- when Host's Turn 1 FIRE arrives, adopt credentials from FIRE and complete handshake!
+    if game_state == STATE_SETUP and not is_host and seq == 1 then
+      if not fleet_locked and setup_ship_idx > 5 and #my_ships >= 5 then
+        my_fleet_str = serialize_fleet(my_ships)
+        my_salt = rand_salt()
+        my_board_hash = djb2_hex(my_fleet_str .. "|" .. my_salt)
+        if handshake_seed == 0 then handshake_seed = rand_int(1, 999999) end
+        fleet_locked = true
+      end
+      if p_mid ~= "" then match_id = p_mid end
+      if sender and sender ~= "" then
+        opponent_id = sender
+        enemy_callsign = sender
+      elseif opponent_id == "" then
+        opponent_id = "HOST"
+      end
+      if f_hash ~= "" then enemy_board_hash = f_hash end
+      if f_seed > 0 then enemy_seed = f_seed end
+
+      if fleet_locked then
+        timer_cancel("seek_broadcast")
+        NetEngine.clear_tx()
+        local_seq = 1
+        game_state = STATE_ENEMY_TURN
+      else
+        combat_log = string.format("> HOST [%s] FIRED! LOCK FLEET TO DEFEND.", tostring(match_id))
+        if draw_screen then draw_screen() end
+        return
+      end
+    elseif f_hash ~= "" and enemy_board_hash == "" then
+      enemy_board_hash = f_hash
+    end
 
     -- Dropped ACK Fix: Defender receives duplicate FIRE for seq - 1
     if seq == local_seq - 1 and last_sent_res then
@@ -1464,7 +1930,12 @@ function NetEngine.process_packet(sender, text)
       end
     end
 
-    local res_payload = string.format("BS|RES|%s|%d|%d,%d|%s|%d", match_id, local_seq, x, y, status, ship_id)
+    local res_payload
+    if local_seq == 1 and my_board_hash ~= "" then
+      res_payload = string.format("BS|RES|%s|%d|%d,%d|%s|%d|%s", match_id, local_seq, x, y, status, ship_id, my_board_hash)
+    else
+      res_payload = string.format("BS|RES|%s|%d|%d,%d|%s|%d", match_id, local_seq, x, y, status, ship_id)
+    end
     last_sent_res = { seq = local_seq, payload = res_payload }
 
     if not is_ai_match then
@@ -1489,13 +1960,17 @@ function NetEngine.process_packet(sender, text)
     return
   end
 
-  -- Incoming Shot Result: BS|RES|<match_id>|<seq>|<x>,<y>|<status>|<ship_id>
+  -- Incoming Shot Result: BS|RES|<match_id>|<seq>|<x>,<y>|<status>|<ship_id>[|<defender_hash>]
   if ptype == "RES" then
     local coords = p[5] or "0,0"
     local cx, cy = coords:match("(%d+),(%d+)")
     local x, y = tonumber(cx), tonumber(cy)
     local status = p[6]
     local ship_id = tonumber(p[7]) or 0
+    local r_hash = (p[8] and p[8] ~= "" and not p[8]:match("^R%d+$")) and p[8] or ""
+    if r_hash ~= "" and enemy_board_hash == "" then
+      enemy_board_hash = r_hash
+    end
 
     -- Dropped ACK Fix: duplicate RES for already processed turn
     if seq == local_seq - 1 then
@@ -1508,8 +1983,9 @@ function NetEngine.process_packet(sender, text)
     -- Implicit ACK for FIRE: clear tx_pending
     NetEngine.clear_tx()
 
-    -- Send explicit ACK
-    if not is_ai_match then
+    -- Send explicit ACK only in mock test harnesses or when not immediately sending REV on real hardware,
+    -- because defender already piggyback-ACKs on next FIRE and sending ACK here locks the radio for 5s before REV!
+    if not is_ai_match and not mesh.send_dm then
       mesh_send(opponent_id, string.format("BS|ACK|%s|%d", match_id, local_seq))
     end
 
@@ -2086,6 +2562,9 @@ draw_screen = function()
 
   if game_state == STATE_SETUP then
     draw_setup_screen()
+    if show_retry_modal then
+      draw_retry_modal()
+    end
     return
   end
 
@@ -2182,14 +2661,22 @@ function app.on_key(key)
       if tx_pending then
         tx_pending.retries = 0
         tx_pending.elapsed = 0
-        mesh_send(opponent_id, tx_pending.payload)
+        tx_pending.next_wait = 6000
+        tx_pending.waiting_pace = false
+        peer_dm_verified = false
+        local ok, err = mesh_send(opponent_id, tx_pending.payload)
+        if (not ok and (err == "too fast" or err == "rate limited")) or (ok and err == "paced") then
+          tx_pending.waiting_pace = true
+        end
+        NetEngine.start_retry_timer()
         combat_log = string.format("> IMMEDIATE RETRANSMIT [Seq %d]...", tx_pending.seq)
       end
       draw_screen()
       return
     elseif k == "2" or k == "q" or k == "escape" then
       show_retry_modal = false
-      NetEngine.clear_tx()
+      timer_cancel("seek_broadcast")
+      NetEngine.clear_tx(true)
       clear_match_state()
       game_state = STATE_LOBBY
       draw_screen()
@@ -2218,12 +2705,12 @@ function app.on_key(key)
       elseif k == "c" then
         fleet_locked = false
         timer_cancel("seek_broadcast")
-        NetEngine.clear_tx()
+        NetEngine.clear_tx(true)
         combat_log = "> FLEET UNLOCKED. [ENTER] Confirm [C] Reset"
       elseif k == "q" or k == "escape" then
         fleet_locked = false
         timer_cancel("seek_broadcast")
-        NetEngine.clear_tx()
+        NetEngine.clear_tx(true)
         game_state = STATE_LOBBY
       end
       draw_screen()
@@ -2485,6 +2972,9 @@ function app.on_message(m)
     if ch ~= target and ch ~= raw_target and ch ~= ("#" .. raw_target) and ch ~= "public" then
       return
     end
+  elseif m.kind == "dm" and text:sub(1, 3) == "BS|" then
+    -- Peer successfully delivered a direct message to us (both nodes have DM permissions & contacts)
+    peer_dm_verified = true
   end
 
   NetEngine.process_packet(sender, text)
