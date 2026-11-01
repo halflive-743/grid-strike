@@ -10,6 +10,14 @@ Grid Strike implements a full 1v1 multiplayer loop over LoRa mesh featuring **st
 
 ---
 
+## Hardware in Action (LilyGo T-Deck Plus)
+
+| Main Menu | Fleet Deployment | Tactical Combat Radar |
+| :---: | :---: | :---: |
+| <img src="pictures/PXL_20261101_040742023.jpg" width="100%" alt="Grid Strike Main Menu on LilyGo T-Deck Plus"> | <img src="pictures/PXL_20261101_040747266.jpg" width="100%" alt="Fleet Deployment on LilyGo T-Deck Plus"> | <img src="pictures/PXL_20261101_040803116.jpg" width="100%" alt="Tactical Combat Radar on LilyGo T-Deck Plus"> |
+
+---
+
 ## Project Structure
 
 ```text
@@ -31,7 +39,10 @@ Grid Strike implements a full 1v1 multiplayer loop over LoRa mesh featuring **st
 ├── simulator.html                    # Multi-device browser simulator with full main menu artwork
 ├── pictures/
 │   ├── grid_strike_banner.jpg        # GitHub banner artwork
-│   └── grid_strike_background.jpeg   # In-game backdrop
+│   ├── grid_strike_background.jpeg   # In-game backdrop
+│   ├── PXL_20261101_040742023.jpg    # Hardware photo: Main Menu (T-Deck Plus)
+│   ├── PXL_20261101_040747266.jpg    # Hardware photo: Fleet Setup (T-Deck Plus)
+│   └── PXL_20261101_040803116.jpg    # Hardware photo: Tactical Combat Radar (T-Deck Plus)
 └── README.md                         # Documentation & reference guide
 ```
 
