@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grid Strike: 1v1 LoRa Naval Combat · Multi-Device Hardware Simulator</title>
+<style>
+  :root {
+    --bg: #070a0f;
+    --shell: #1b2026;
+    --shell-edge: #2c343e;
+    --teal: #15b6a6;
+    --amber: #f58220;
+    --gold: #f2c14e;
+    --red: #ff3333;
+    --cyan: #3388aa;
+    --text: #e6e9ed;
+    --sub: #7a7f87;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  body {
+    background: radial-gradient(circle at 50% 20%, #121c26 0%, #06090d 80%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 16px;
+  }
+  header {
+    text-align: center;
+    margin-bottom: 12px;
+  }
+  header h1 {
+    font-size: 1.4rem;
+    letter-spacing: 1.5px;
+    font-weight: 800;
+  }
+  header h1 span { color: var(--teal); }
+  header p {
+    color: var(--sub);
+    font-size: 0.85rem;
+    margin-top: 4px;
+  }
+
+  /* Device Switcher Bar */
+  .device-bar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    max-width: 900px;
+  }
+  .dev-pill {
+    background: #12171e;
+    border: 1px solid #283344;
+    border-radius: 99px;
+    padding: 5px 14px;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .dev-pill:hover {
+    border-color: var(--teal);
+    color: #fff;
+  }
+  .dev-pill.active {
+    background: #0f303a;
+    border-color: var(--teal);
+    color: var(--teal);
+    font-weight: 700;
+    box-shadow: 0 0 10px rgba(21, 182, 166, 0.3);
+  }
+
+  /* Hardware Chassis Shell */
+  .device-shell {
+    background: linear-gradient(180deg, #22272e 0%, #161a20 100%);
+    border: 2px solid var(--shell-edge);
+    border-radius: 24px;
+    padding: 16px 20px 20px;
+    box-shadow: 0 28px 70px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.08);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transition: width 0.25s, max-width 0.25s;
+    max-width: 100%;
+  }
+  .bezel-top {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    padding: 0 4px;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: #8b949e;
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+  }
+  .screen-wrap {
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: inset 0 0 16px rgba(0,0,0,0.95), 0 0 0 2px #0f1216;
+    position: relative;
+    cursor: crosshair;
+    display: flex;
+    flex-direction: column;
+  }
+  #screen {
+    display: block;
+    image-rendering: auto;
+  }
+
+  /* Touch Controls & Keyboard (for T-Deck mode) */
+  .tdeck-keyboard {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+  }
+  .kb-row {
+    display: flex;
+    gap: 4px;
+  }
+  .key {
+    background: #1c2128;
+    border: 1px solid #30363d;
+    color: #c9d1d9;
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    cursor: pointer;
+    min-width: 26px;
+    text-align: center;
+    box-shadow: 0 2px 0 #0d1117;
+  }
+  .key:hover { background: #262c36; border-color: #484f58; }
+  .key:active, .key.pressed { transform: translateY(2px); box-shadow: none; background: var(--teal); color: #000; }
+  .key.wide { min-width: 58px; }
+  .key.primary { background: #16403c; border-color: var(--teal); color: var(--teal); font-weight: 700; }
+
+  .instructions {
+    margin-top: 14px;
+    color: var(--sub);
+    font-size: 11px;
+    text-align: center;
+    line-height: 1.6;
+    max-width: 720px;
+  }
+  .instructions kbd {
+    background: #1f242c;
+    border: 1px solid #384252;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--teal);
+    font-family: ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>GRID <span>★</span> STRIKE</h1>
+  <p>1v1 Naval LoRa Combat · WADAMESH Lua App SDK Simulator</p>
+</header>
+
+<div class="device-bar">
+  <button class="dev-pill active" onclick="setDevice('p4_lcd')">LilyGo T-Display P4 LCD (1168×474)</button>
+  <button class="dev-pill" onclick="setDevice('p4_amoled')">LilyGo T-Display P4 AMOLED (1232×502)</button>
+  <button class="dev-pill" onclick="setDevice('tdeck')">LilyGo T-Deck (320×240)</button>
+  <button class="dev-pill" onclick="setDevice('p4_port')">LilyGo P4 Portrait (Rotation Lock)</button>
+</div>
+
+<div class="device-shell" id="chassis">
+  <div class="bezel-top">
+    <span id="dev_title">LILYGO T-DISPLAY P4 · 1168×474</span>
+    <span>WADAMESH LUA ENGINE</span>
+  </div>
+  <div class="screen-wrap">
+    <canvas id="screen" width="1168" height="474"></canvas>
+  </div>
+  
+  <div class="tdeck-keyboard" id="tdeck_kb" style="display: none;">
+    <div class="kb-row">
+      <button class="key" data-k="1">1</button>
+      <button class="key" data-k="2">2</button>
+      <button class="key" data-k="3">3</button>
+      <button class="key" data-k="4">4</button>
+      <button class="key" data-k="5">5</button>
+      <button class="key" data-k="6">6</button>
+      <button class="key" data-k="7">7</button>
+      <button class="key" data-k="8">8</button>
+      <button class="key" data-k="9">9</button>
+      <button class="key" data-k="0">0</button>
+    </div>
+    <div class="kb-row">
+      <button class="key" data-k="q">Q</button>
+      <button class="key" data-k="w">W</button>
+      <button class="key" data-k="e">E</button>
+      <button class="key" data-k="r">R</button>
+      <button class="key" data-k="t">T</button>
+      <button class="key" data-k="y">Y</button>
+      <button class="key" data-k="u">U</button>
+      <button class="key" data-k="i">I</button>
+      <button class="key" data-k="o">O</button>
+      <button class="key" data-k="p">P</button>
+    </div>
+    <div class="kb-row">
+      <button class="key" data-k="a">A</button>
+      <button class="key" data-k="s">S</button>
+      <button class="key" data-k="d">D</button>
+      <button class="key" data-k="f">F</button>
+      <button class="key" data-k="g">G</button>
+      <button class="key" data-k="h">H</button>
+      <button class="key" data-k="j">J</button>
+      <button class="key" data-k="k">K</button>
+      <button class="key" data-k="l">L</button>
+      <button class="key primary wide" data-k="enter">ENTER</button>
+    </div>
+    <div class="kb-row">
+      <button class="key" data-k="z">Z</button>
+      <button class="key" data-k="x">X</button>
+      <button class="key" data-k="c">C</button>
+      <button class="key" data-k="v">V</button>
+      <button class="key" data-k="b">B</button>
+      <button class="key" data-k="n">N</button>
+      <button class="key" data-k="m">M</button>
+      <button class="key wide" data-k="space">SPACE</button>
+      <button class="key" data-k="left">←</button>
+      <button class="key" data-k="up">↑</button>
+      <button class="key" data-k="down">↓</button>
+      <button class="key" data-k="right">→</button>
+    </div>
+  </div>
+</div>
+
+<div class="instructions">
+  <strong>Navigation:</strong> Click/Tap on the <strong>HOST</strong>, <strong>JOIN</strong>, or <strong>VS AI</strong> metallic buttons on the main screen.<br>
+  <strong>Keyboard Shortcuts:</strong> <kbd>1</kbd> Host &nbsp;|&nbsp; <kbd>2</kbd> Join &nbsp;|&nbsp; <kbd>3</kbd> Offline AI &nbsp;|&nbsp; <kbd>R</kbd> Rotate Ship &nbsp;|&nbsp; <kbd>C</kbd> Clear Fleet &nbsp;|&nbsp; <kbd>Space / Enter</kbd> Fire / Confirm.
+</div>
+
+<script>
+// Main Menu Background Image
+const bgImg = new Image();
+bgImg.src = "pictures/main_menu.jpeg";
+let bgLoaded = false;
+bgImg.onload = () => { bgLoaded = true; draw_screen(); };
+
+// Audio Synth
+const AudioContext = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+function playBeep(freq = 600, duration = 0.08, type = "sine") {
+  try {
+    if (!audioCtx) audioCtx = new AudioContext();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  } catch(e) {}
+}
+
+// Device Configs
+const DEVICES = {
+  p4_lcd:    { w: 1168, h: 474, title: "LILYGO T-DISPLAY P4 LCD · 1168×474", port: false, s2: true },
+  p4_amoled: { w: 1232, h: 502, title: "LILYGO T-DISPLAY P4 AMOLED · 1232×502", port: false, s2: true },
+  tdeck:     { w: 320,  h: 240, title: "LILYGO T-DECK PLUS · 320×240", port: false, s2: false },
+  p4_port:   { w: 540,  h: 1102, title: "LILYGO P4 PORTRAIT · FORCED ROTATION SCREEN", port: true, s2: true }
+};
+
+let curDevKey = "p4_lcd";
+let W = 1168, H = 474, isPort = false, s2 = true;
+
+// State Machine
+let gameState = "LOBBY"; // LOBBY, SETUP, COMBAT, GAME_OVER
+let lobbyFocus = 1;      // 1=HOST, 2=JOIN, 3=VS AI
+let soundOn = true;
+
+// Ships & Board
+const SHIPS = [
+  { name: "Carrier",    len: 5, abbr: "CV" },
+  { name: "Battleship", len: 4, abbr: "BB" },
+  { name: "Cruiser",    len: 3, abbr: "CA" },
+  { name: "Submarine",  len: 3, abbr: "SS" },
+  { name: "Destroyer",  len: 2, abbr: "DD" }
+];
+let setupShipIdx = 0;
+let setupDir = "H";
+let setupCursor = { x: 0, y: 0 };
+let myBoard = Array(10).fill(null).map(() => Array(10).fill(0));
+let myShips = [];
+
+// Combat Reticle & Shots
+let targetReticle = { x: 0, y: 0 };
+let myShots = Array(10).fill(null).map(() => Array(10).fill(0)); // 0=none, 1=hit, 2=miss
+let enemyShots = Array(10).fill(null).map(() => Array(10).fill(0));
+let enemyBoard = Array(10).fill(null).map(() => Array(10).fill(0));
+let myHits = 0, enemyHits = 0;
+let combatLog = "> FLEET CONFIRMED. COMMENCE FIRING!";
+
+const cv = document.getElementById("screen");
+const ctx = cv.getContext("2d");
+
+function setDevice(key) {
+  curDevKey = key;
+  document.querySelectorAll('.dev-pill').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+
+  const cfg = DEVICES[key];
+  W = cfg.w; H = cfg.h; isPort = cfg.port; s2 = cfg.s2;
+  cv.width = W; cv.height = H;
+  document.getElementById("dev_title").innerText = cfg.title;
+
+  document.getElementById("tdeck_kb").style.display = (key === "tdeck") ? "flex" : "none";
+  draw_screen();
+}
+
+function getLobbyButtons() {
+  if (s2) {
+    const row_w = Math.min(1080, W - 64);
+    const gap = 24;
+    const bw = Math.floor((row_w - gap * 2) / 3);
+    const bh = 80;
+    const sx = Math.floor((W - row_w) / 2);
+    const by = H - bh - 28;
+    return [
+      { id: "host", title: "Host", x: sx, y: by, w: bw, h: bh },
+      { id: "join", title: "Join", x: sx + bw + gap, y: by, w: bw, h: bh },
+      { id: "ai",   title: "VS AI", x: sx + (bw + gap) * 2, y: by, w: bw, h: bh }
+    ];
+  } else {
+    const gap = 8;
+    const row_w = W - 20;
+    const bw = Math.floor((row_w - gap * 2) / 3);
+    const bh = 40;
+    const sx = 10;
+    const by = H - bh - 12;
+    return [
+      { id: "host", title: "Host", x: sx, y: by, w: bw, h: bh },
+      { id: "join", title: "Join", x: sx + bw + gap, y: by, w: bw, h: bh },
+      { id: "ai",   title: "VS AI", x: sx + (bw + gap) * 2, y: by, w: bw, h: bh }
+    ];
+  }
+}
+
+function getMenuButton() {
+  if (s2) {
+    const bw = 110;
+    const bh = 36;
+    const bx = W - bw - 14;
+    const by = H - 52 + Math.floor((52 - bh) / 2);
+    return { x: bx, y: by, w: bw, h: bh };
+  } else {
+    const bw = 54;
+    const bh = 26;
+    const bx = W - bw - 6;
+    const by = H - 48 + Math.floor((48 - bh) / 2);
+    return { x: bx, y: by, w: bw, h: bh };
+  }
+}
+
+function drawMenuButton() {
+  const mb = getMenuButton();
+  drawMetallicButton(mb.x, mb.y, mb.w, mb.h, "Menu", "#e6e9ed", "#323b46");
+}
+
+function drawMetallicButton(x, y, w, h, text, textCol = "#e6e9ed", borderGlow = "#323b46") {
+  ctx.fillStyle = borderGlow;
+  roundRect(ctx, x, y, w, h, 4, true, false);
+  ctx.fillStyle = "#222830";
+  roundRect(ctx, x + 2, y + 2, w - 4, h - 4, 3, true, false);
+
+  ctx.strokeStyle = "#586474";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + 2, y + h - 2);
+  ctx.lineTo(x + 2, y + 2);
+  ctx.lineTo(x + w - 2, y + 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = "#10141a";
+  ctx.beginPath();
+  ctx.moveTo(x + w - 2, y + 2);
+  ctx.lineTo(x + w - 2, y + h - 2);
+  ctx.lineTo(x + 2, y + h - 2);
+  ctx.stroke();
+
+  if (w >= 40 && h >= 22) {
+    const tabW = Math.min(Math.floor(w * 0.4), s2 ? 36 : 18);
+    const tabH = s2 ? 5 : 3;
+    ctx.fillStyle = "#586474";
+    roundRect(ctx, x + Math.floor(w / 2) - Math.floor(tabW / 2), y - Math.floor(tabH / 2), tabW, tabH, 2, true, false);
+  }
+
+  const roff = (w >= 70 && h >= 30) ? 4 : 3;
+  if (w >= 36 && h >= 20) {
+    ctx.fillStyle = "#7e8b9a";
+    ctx.fillRect(x + roff, y + roff, 2, 2);
+    ctx.fillRect(x + w - roff - 2, y + roff, 2, 2);
+    ctx.fillRect(x + roff, y + h - roff - 2, 2, 2);
+    ctx.fillRect(x + w - roff - 2, y + h - roff - 2, 2, 2);
+  }
+
+  if (text) {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `bold ${s2 ? (h >= 45 ? 18 : 14) : (h >= 30 ? 12 : 11)}px monospace`;
+    ctx.fillStyle = "#0a0d12";
+    ctx.fillText(text, x + w / 2 + 1, y + h / 2 + 1);
+    ctx.fillStyle = textCol;
+    ctx.fillText(text, x + w / 2, y + h / 2);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+}
+
+function drawPanelFrame(x, y, w, h, title, titleCol = "#15b6a6", borderGlow = "#323b46") {
+  ctx.fillStyle = borderGlow;
+  roundRect(ctx, x, y, w, h, 5, true, false);
+  ctx.fillStyle = "#0d141c";
+  roundRect(ctx, x + 2, y + 2, w - 4, h - 4, 3, true, false);
+
+  ctx.strokeStyle = "#586474";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + 2, y + h - 2);
+  ctx.lineTo(x + 2, y + 2);
+  ctx.lineTo(x + w - 2, y + 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = "#10141a";
+  ctx.beginPath();
+  ctx.moveTo(x + w - 2, y + 2);
+  ctx.lineTo(x + w - 2, y + h - 2);
+  ctx.lineTo(x + 2, y + h - 2);
+  ctx.stroke();
+
+  const roff = 4;
+  ctx.fillStyle = "#7e8b9a";
+  ctx.fillRect(x + roff, y + roff, 2, 2);
+  ctx.fillRect(x + w - roff - 2, y + roff, 2, 2);
+  ctx.fillRect(x + roff, y + h - roff - 2, 2, 2);
+  ctx.fillRect(x + w - roff - 2, y + h - roff - 2, 2, 2);
+
+  if (title) {
+    const tsz = s2 ? 14 : 10;
+    ctx.font = `bold ${tsz}px monospace`;
+    const tw = ctx.measureText(title).width;
+    const tabW = tw + (s2 ? 20 : 12);
+    const tabH = s2 ? 16 : 12;
+    const tabX = x + Math.floor((w - tabW) / 2);
+    const tabY = y - tabH + 1;
+    ctx.fillStyle = "#222830";
+    roundRect(ctx, tabX, tabY, tabW, tabH, 2, true, false);
+    ctx.strokeStyle = "#586474";
+    ctx.strokeRect(tabX, tabY, tabW, tabH);
+    ctx.fillStyle = "#05070a";
+    ctx.fillText(title, tabX + (s2 ? 10 : 6) + 1, tabY + (s2 ? 12 : 9) + 1);
+    ctx.fillStyle = titleCol;
+    ctx.fillText(title, tabX + (s2 ? 10 : 6), tabY + (s2 ? 12 : 9));
+  }
+}
+
+function draw_screen() {
+  ctx.clearRect(0, 0, W, H);
+
+  // 1. Portrait Rotation Lock Guard
+  if (isPort) {
+    ctx.fillStyle = "#091018";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = "#222c38";
+    ctx.strokeStyle = "#15b6a6";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(30, H / 2 - 120, W - 60, 240);
+    ctx.fillRect(30, H / 2 - 120, W - 60, 240);
+
+    ctx.fillStyle = "#f58220";
+    ctx.font = "bold 26px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("[ ROTATE DEVICE ]", W / 2, H / 2 - 50);
+
+    ctx.fillStyle = "#e6e9ed";
+    ctx.font = "bold 20px monospace";
+    ctx.fillText("GRID STRIKE: NAVAL COMBAT", W / 2, H / 2 - 10);
+
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "14px monospace";
+    ctx.fillText("Grid Strike requires horizontal landscape display.", W / 2, H / 2 + 30);
+    ctx.fillStyle = "#15b6a6";
+    ctx.fillText("Rotate your device to Landscape to play.", W / 2, H / 2 + 60);
+    return;
+  }
+
+  // 2. Main Lobby State (Unhighlighted, clean artwork buttons)
+  if (gameState === "LOBBY") {
+    if (bgLoaded) {
+      ctx.drawImage(bgImg, 0, 0, W, H);
+    } else {
+      ctx.fillStyle = "#091018";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#00ff66";
+      ctx.font = "bold 24px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("GRID STRIKE: NAVAL COMBAT", W / 2, 80);
+    }
+    return;
+  }
+
+  // 3. Setup Screen
+  if (gameState === "SETUP") {
+    ctx.fillStyle = "#0a0e14";
+    ctx.fillRect(0, 0, W, H);
+
+    // Header
+    ctx.fillStyle = "#0d141b";
+    ctx.fillRect(0, 0, W, 28);
+    ctx.fillStyle = "#15b6a6";
+    ctx.font = "bold 13px monospace";
+    ctx.textAlign = "left";
+    ctx.fillText("FLEET DEPLOYMENT", 16, 19);
+
+    const cs = s2 ? 32 : 14;
+    const ox = s2 ? 50 : 20;
+    const oy = s2 ? 60 : 36;
+
+    // Draw 10x10 Grid
+    for (let y = 0; y < 10; y++) {
+      for (let x = 0; x < 10; x++) {
+        const px = ox + x * cs;
+        const py = oy + y * cs;
+        ctx.fillStyle = (myBoard[y][x] > 0) ? "#00ff66" : "#0d141c";
+        ctx.fillRect(px, py, cs - 1, cs - 1);
+        ctx.strokeStyle = "#182432";
+        ctx.strokeRect(px, py, cs, cs);
+      }
+    }
+
+    // Controls
+    const rx = ox + 11 * cs + 20;
+    ctx.fillStyle = "#e6e9ed";
+    ctx.font = s2 ? "16px monospace" : "12px monospace";
+    const curShip = SHIPS[setupShipIdx];
+    if (curShip) {
+      ctx.fillText(`Deploying: ${curShip.name} (${curShip.len})`, rx, oy + 20);
+      ctx.fillStyle = "#f58220";
+      ctx.fillText(`Direction: ${setupDir === "H" ? "HORIZONTAL" : "VERTICAL"}`, rx, oy + 50);
+      ctx.fillStyle = "#94a3b8";
+      ctx.fillText(`[R] Rotate Direction`, rx, oy + 90);
+      ctx.fillText(`[C] Reset Fleet`, rx, oy + 120);
+      ctx.fillStyle = "#15b6a6";
+      ctx.fillText(`[ENTER] Auto Place / Confirm`, rx, oy + 160);
+    } else {
+      ctx.fillStyle = "#00ff66";
+      ctx.fillText("FLEET DEPLOYED & LOCKED!", rx, oy + 40);
+      ctx.fillStyle = "#f58220";
+      ctx.fillText("Click [CONFIRM] or press ENTER to start!", rx, oy + 80);
+    }
+
+    // Bottom Bar with Menu button
+    const botH = s2 ? 52 : 48;
+    ctx.fillStyle = "#0e141b";
+    ctx.fillRect(0, H - botH, W, botH);
+    ctx.strokeStyle = "#323b46";
+    ctx.strokeRect(0, H - botH, W, 1);
+    ctx.fillStyle = "#15b6a6";
+    ctx.font = "12px monospace";
+    ctx.fillText("[WASD/Tap] Aim/Place  [R] Rotate", 16, H - botH + 28);
+    drawMenuButton();
+    return;
+  }
+
+  // 4. Combat Screen
+  if (gameState === "COMBAT") {
+    ctx.fillStyle = "#0a0e14";
+    ctx.fillRect(0, 0, W, H);
+
+    // Header
+    ctx.fillStyle = "#0d141b";
+    ctx.fillRect(0, 0, W, 28);
+    ctx.fillStyle = "#00ff66";
+    ctx.font = "bold 13px monospace";
+    ctx.textAlign = "left";
+    ctx.fillText("COMBAT: YOUR TURN", 16, 19);
+
+    const cs = s2 ? 30 : 13;
+    const oy = s2 ? 50 : 34;
+    const targetOx = s2 ? 30 : 10;
+    const homeOx = s2 ? targetOx + cs * 10 + 40 : 166;
+
+    // Target Radar
+    for (let y = 0; y < 10; y++) {
+      for (let x = 0; x < 10; x++) {
+        const px = targetOx + x * cs;
+        const py = oy + y * cs;
+        const st = myShots[y][x];
+        ctx.fillStyle = (st === 1) ? "#ff3333" : ((st === 2) ? "#3388aa" : "#0d141c");
+        ctx.fillRect(px, py, cs - 1, cs - 1);
+        ctx.strokeStyle = "#182432";
+        ctx.strokeRect(px, py, cs, cs);
+        if (targetReticle.x === x && targetReticle.y === y) {
+          ctx.strokeStyle = "#ffaa00";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(px - 1, py - 1, cs + 1, cs + 1);
+        }
+      }
+    }
+
+    // Home Fleet
+    for (let y = 0; y < 10; y++) {
+      for (let x = 0; x < 10; x++) {
+        const px = homeOx + x * cs;
+        const py = oy + y * cs;
+        const hasShip = (myBoard[y][x] > 0);
+        const hit = (enemyShots[y][x] === 1);
+        ctx.fillStyle = hit ? "#ff3333" : (hasShip ? "#00aa44" : "#0d141c");
+        ctx.fillRect(px, py, cs - 1, cs - 1);
+        ctx.strokeStyle = "#182432";
+        ctx.strokeRect(px, py, cs, cs);
+      }
+    }
+
+    // Bottom Bar with Menu button
+    const botH = s2 ? 52 : 48;
+    ctx.fillStyle = "#0e141b";
+    ctx.fillRect(0, H - botH, W, botH);
+    ctx.strokeStyle = "#323b46";
+    ctx.strokeRect(0, H - botH, W, 1);
+    ctx.fillStyle = "#15b6a6";
+    ctx.font = "12px monospace";
+    ctx.fillText(combatLog, 16, H - botH + 28);
+    drawMenuButton();
+  }
+}
+
+// Click / Touch Handler
+cv.addEventListener("click", e => {
+  if (isPort) return;
+  const rect = cv.getBoundingClientRect();
+  const tx = Math.floor((e.clientX - rect.left) * (W / rect.width));
+  const ty = Math.floor((e.clientY - rect.top) * (H / rect.height));
+
+  // Check bottom-right Menu button on ANY non-lobby screen
+  if (gameState !== "LOBBY") {
+    const mb = getMenuButton();
+    if (tx >= mb.x && tx <= mb.x + mb.w && ty >= mb.y && ty <= mb.y + mb.h) {
+      gameState = "LOBBY";
+      playBeep(600, 0.08);
+      draw_screen();
+      return;
+    }
+  }
+
+  if (gameState === "LOBBY") {
+    const btns = getLobbyButtons();
+    btns.forEach((b, i) => {
+      if (tx >= b.x && tx <= b.x + b.w && ty >= b.y && ty <= b.y + b.h) {
+        lobbyFocus = i + 1;
+        playBeep(800, 0.1);
+        startSetup(b.id === "ai");
+      }
+    });
+    return;
+  }
+
+  if (gameState === "SETUP") {
+    autoPlaceFleet();
+    playBeep(900, 0.12);
+    startCombat();
+    return;
+  }
+
+  if (gameState === "COMBAT") {
+    const cs = s2 ? 30 : 13;
+    const oy = s2 ? 50 : 34;
+    const targetOx = s2 ? 30 : 10;
+    const gx = Math.floor((tx - targetOx) / cs);
+    const gy = Math.floor((ty - oy) / cs);
+    if (gx >= 0 && gx < 10 && gy >= 0 && gy < 10) {
+      targetReticle.x = gx;
+      targetReticle.y = gy;
+      fireShot();
+    }
+  }
+});
+
+function startSetup(isAi = true) {
+  gameState = "SETUP";
+  setupShipIdx = 0;
+  myBoard = Array(10).fill(null).map(() => Array(10).fill(0));
+  myShips = [];
+  draw_screen();
+}
+
+function autoPlaceFleet() {
+  myBoard = Array(10).fill(null).map(() => Array(10).fill(0));
+  SHIPS.forEach((s, idx) => {
+    let placed = false;
+    while (!placed) {
+      const dir = Math.random() < 0.5 ? "H" : "V";
+      const x = dir === "H" ? Math.floor(Math.random() * (11 - s.len)) : Math.floor(Math.random() * 10);
+      const y = dir === "V" ? Math.floor(Math.random() * (11 - s.len)) : Math.floor(Math.random() * 10);
+      let ok = true;
+      for (let i = 0; i < s.len; i++) {
+        const cx = dir === "H" ? x + i : x;
+        const cy = dir === "V" ? y + i : y;
+        if (myBoard[cy][cx] !== 0) { ok = false; break; }
+      }
+      if (ok) {
+        for (let i = 0; i < s.len; i++) {
+          const cx = dir === "H" ? x + i : x;
+          const cy = dir === "V" ? y + i : y;
+          myBoard[cy][cx] = idx + 1;
+        }
+        placed = true;
+      }
+    }
+  });
+}
+
+function startCombat() {
+  gameState = "COMBAT";
+  myShots = Array(10).fill(null).map(() => Array(10).fill(0));
+  enemyShots = Array(10).fill(null).map(() => Array(10).fill(0));
+  enemyBoard = Array(10).fill(null).map(() => Array(10).fill(0));
+  myHits = 0; enemyHits = 0;
+
+  // Place enemy AI fleet
+  SHIPS.forEach((s, idx) => {
+    let placed = false;
+    while (!placed) {
+      const dir = Math.random() < 0.5 ? "H" : "V";
+      const x = dir === "H" ? Math.floor(Math.random() * (11 - s.len)) : Math.floor(Math.random() * 10);
+      const y = dir === "V" ? Math.floor(Math.random() * (11 - s.len)) : Math.floor(Math.random() * 10);
+      let ok = true;
+      for (let i = 0; i < s.len; i++) {
+        const cx = dir === "H" ? x + i : x;
+        const cy = dir === "V" ? y + i : y;
+        if (enemyBoard[cy][cx] !== 0) { ok = false; break; }
+      }
+      if (ok) {
+        for (let i = 0; i < s.len; i++) {
+          const cx = dir === "H" ? x + i : x;
+          const cy = dir === "V" ? y + i : y;
+          enemyBoard[cy][cx] = idx + 1;
+        }
+        placed = true;
+      }
+    }
+  });
+
+  combatLog = "> MATCH STARTED! AIM RETICLE & FIRE!";
+  draw_screen();
+}
+
+function fireShot() {
+  const x = targetReticle.x;
+  const y = targetReticle.y;
+  if (myShots[y][x] !== 0) return;
+
+  const hit = (enemyBoard[y][x] > 0);
+  myShots[y][x] = hit ? 1 : 2;
+  if (hit) {
+    myHits++;
+    playBeep(240, 0.25, "square");
+    combatLog = `> DIRECT HIT AT (${x},${y})!`;
+  } else {
+    playBeep(500, 0.08, "sine");
+    combatLog = `> SPLASH MISS AT (${x},${y})!`;
+  }
+
+  if (myHits >= 17) {
+    combatLog = "> VICTORY! ENEMY FLEET DESTROYED!";
+    playBeep(880, 0.4, "triangle");
+    draw_screen();
+    return;
+  }
+
+  // AI Counter-Shot
+  setTimeout(() => {
+    let fired = false;
+    while (!fired) {
+      const ax = Math.floor(Math.random() * 10);
+      const ay = Math.floor(Math.random() * 10);
+      if (enemyShots[ay][ax] === 0) {
+        const enHit = (myBoard[ay][ax] > 0);
+        enemyShots[ay][ax] = enHit ? 1 : 2;
+        if (enHit) {
+          enemyHits++;
+          playBeep(180, 0.3, "sawtooth");
+          combatLog = `> ALERT! ENEMY HIT OUR SHIP AT (${ax},${ay})!`;
+        }
+        fired = true;
+      }
+    }
+    draw_screen();
+  }, 400);
+
+  draw_screen();
+}
+
+// Keyboard input
+window.addEventListener("keydown", e => {
+  const k = e.key.toLowerCase();
+  if ((k === "q" || k === "escape") && gameState !== "LOBBY") {
+    gameState = "LOBBY";
+    playBeep(600, 0.08);
+    draw_screen();
+    return;
+  }
+  if (gameState === "LOBBY") {
+    if (k === "1" || k === "h") { lobbyFocus = 1; playBeep(800, 0.1); startSetup(false); }
+    else if (k === "2" || k === "j") { lobbyFocus = 2; playBeep(800, 0.1); startSetup(false); }
+    else if (k === "3" || k === "a" || k === "v") { lobbyFocus = 3; playBeep(800, 0.1); startSetup(true); }
+    else if (k === "arrowleft") { lobbyFocus = (lobbyFocus > 1) ? lobbyFocus - 1 : 3; playBeep(600, 0.05); draw_screen(); }
+    else if (k === "arrowright") { lobbyFocus = (lobbyFocus < 3) ? lobbyFocus + 1 : 1; playBeep(600, 0.05); draw_screen(); }
+    else if (k === "enter" || k === " ") { playBeep(800, 0.1); startSetup(lobbyFocus === 3); }
+  } else if (gameState === "SETUP") {
+    if (k === "r") { setupDir = (setupDir === "H") ? "V" : "H"; playBeep(500, 0.06); draw_screen(); }
+    else if (k === "enter" || k === " ") { autoPlaceFleet(); startCombat(); }
+  } else if (gameState === "COMBAT") {
+    if (k === "arrowleft") { targetReticle.x = Math.max(0, targetReticle.x - 1); draw_screen(); }
+    else if (k === "arrowright") { targetReticle.x = Math.min(9, targetReticle.x + 1); draw_screen(); }
+    else if (k === "arrowup") { targetReticle.y = Math.max(0, targetReticle.y - 1); draw_screen(); }
+    else if (k === "arrowdown") { targetReticle.y = Math.min(9, targetReticle.y + 1); draw_screen(); }
+    else if (k === "enter" || k === " ") { fireShot(); }
+  }
+});
+
+// Setup on-screen keyboard listeners
+document.querySelectorAll('.key').forEach(el => {
+  el.addEventListener('click', () => {
+    const k = el.getAttribute('data-k');
+    if (k) {
+      el.classList.add('pressed');
+      setTimeout(() => el.classList.remove('pressed'), 120);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: k }));
+    }
+  });
+});
+
+// Initial boot
+draw_screen();
+</script>
+</body>
+</html>
+

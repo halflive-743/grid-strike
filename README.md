@@ -1,6 +1,10 @@
-# Grid Strike: 1v1 LoRa Battleship for WADAMESH (Lua 5.4) — v1.0
+<p align="center">
+  <img src="pictures/grid_strike_banner.jpg" alt="Grid Strike: Naval Combat" width="100%">
+</p>
 
-A high-contrast, tactical naval radar **Battleship** game ("Grid Strike") designed for the **LilyGo T-Deck Plus** (ESP32-S3) using the on-device **WADAMESH Lua App SDK (`wada.*` API v1)**.
+# Grid Strike: 1v1 LoRa Naval Combat for WADAMESH (Lua 5.4) — v1.0
+
+A high-contrast, tactical naval radar combat game (**Grid Strike**) designed for the **LilyGo T-Deck Plus** (ESP32-S3) and **LilyGo T-Display P4** (AMOLED/LCD) using the on-device **WADAMESH Lua App SDK (`wada.*` API v1)**.
 
 Grid Strike implements a full 1v1 multiplayer loop over LoRa mesh featuring **strict lockstep turn-based combat with explicit ACK handshakes**, a **salted commit-reveal anti-cheat audit**, **crash recovery persistence**, and **tactile screen-shake / audio feedback**. It also includes a smart offline **Hunt/Target AI** mode for solo play.
 
@@ -9,17 +13,25 @@ Grid Strike implements a full 1v1 multiplayer loop over LoRa mesh featuring **st
 ## Project Structure
 
 ```text
-├── battleship.lua                    # Standalone Lua app ready for SD card sideloading
-├── battleship.json                   # App manifest (v1.0)
+├── gridstrike.lua                    # Standalone Lua app ready for SD card sideloading
+├── gridstrike.json                   # App manifest (v1.0)
 ├── deploy/
 │   └── apps/
-│       └── battleship/
+│       ├── gridstrike/
+│       │   └── 1.0/
+│       │       ├── gridstrike.json   # WADAMESH Store manifest bundle
+│       │       └── gridstrike.lua    # Production release script
+│       └── battleship/               # Compatibility alias bundle
 │           └── 1.0/
-│               ├── battleship.json   # WADAMESH Store manifest bundle
-│               └── battleship.lua    # Production release script
-├── test_battleship.lua               # Instruction budget, UI, & state machine test suite
+│               ├── battleship.json
+│               └── battleship.lua
+├── test_gridstrike.lua               # Instruction budget, UI, & state machine test suite
 ├── test_multiplayer.lua              # Full end-to-end 1v1 RF mesh network simulation (Host vs Challenger)
 ├── test_anti_cheat.lua               # Comprehensive 6-point anti-cheat audit verifier test suite
+├── simulator.html                    # Multi-device browser simulator with full main menu artwork
+├── pictures/
+│   ├── grid_strike_banner.jpg        # GitHub banner artwork
+│   └── grid_strike_background.jpeg   # In-game backdrop
 └── README.md                         # Documentation & reference guide
 ```
 
@@ -112,6 +124,7 @@ Prevents modified clients from lying about hit results or moving ships mid-game:
 | **Touchscreen** | Combat | Tap any cell on Target Radar to aim reticle and fire |
 | **Touchscreen** | Setup | Tap Deployment Grid to position and place current warship |
 | **Touchscreen** | Global | Tap top-right corner (`[VOL]` / `[MUTE]`) to toggle audio |
+| **Menu Button** | Bottom-Right (All non-Lobby screens) | Return immediately to Main Menu / Lobby |
 | **`WASD` / Arrows** | Combat / Setup | Move aiming reticle / position ship preview |
 | **`Enter` / `Space`** | Combat | Fire torpedo at reticle coordinates |
 | **`Enter` / `Space`** | Setup | Confirm placement of current ship |
@@ -120,24 +133,24 @@ Prevents modified clients from lying about hit results or moving ships mid-game:
 | **`C`** | Setup | Clear placed ships and restart deployment |
 | **`M`** | Global | Toggle sound effects on/off |
 | **`1` / `2` / `3`** | Lobby | Host Match (`1`), Join Match (`2`), Play vs Offline AI (`3`) |
-| **`Q` / `Esc`** | Modal / Game Over | Abandon match / return to Lobby |
+| **`Q` / `Esc`** | Any active screen | Abandon active match / return to Main Menu |
 
 ---
 
 ## Installing on Your Device
 
 ### Option 1: microSD Card (Recommended)
-1. Copy `battleship.lua` and `battleship.json` to your microSD card:
+1. Copy `gridstrike.lua` and `gridstrike.json` to your microSD card:
    ```text
-   /meshcomod/apps/battleship.lua
-   /meshcomod/apps/battleship.json
+   /meshcomod/apps/gridstrike.lua
+   /meshcomod/apps/gridstrike.json
    ```
-2. Insert the card into your T-Deck Plus and open the **Apps** drawer. **Grid Strike** will appear with the game icon.
+2. Insert the card into your T-Deck Plus or T-Display P4 and open the **Apps** drawer. **Grid Strike** will appear with the game icon.
 
 ### Option 2: USB Serial Sideload
 Using the WADAMESH repository's sideload script:
 ```bash
-python scripts/sideload_app.py --port COM3 --reboot deploy/apps/battleship/1.0
+python scripts/sideload_app.py --port COM3 --reboot deploy/apps/gridstrike/1.0
 ```
 
 ---
@@ -148,7 +161,7 @@ Run all verification tests using standard Lua 5.4:
 
 ```bash
 # 1. Unit tests, instruction budget benchmark, and idempotency
-lua test_battleship.lua
+lua test_gridstrike.lua
 
 # 2. Complete 1v1 multi-hop network simulation (Host vs Challenger)
 lua test_multiplayer.lua
@@ -156,4 +169,3 @@ lua test_multiplayer.lua
 # 3. Comprehensive 6-point anti-cheat audit test suite
 lua test_anti_cheat.lua
 ```
-

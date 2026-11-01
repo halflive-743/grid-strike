@@ -1,6 +1,6 @@
 -- ==============================================================================
--- GRID STRIKE: 1v1 Battleship for WADAMESH (LilyGo T-Deck & T-Display P4)
--- Production-Ready Single-File Script: battleship.lua
+-- GRID STRIKE: 1v1 Tactical Naval Combat for WADAMESH (LilyGo T-Deck & T-Display P4)
+-- Production-Ready Single-File Script: gridstrike.lua / battleship.lua
 -- ==============================================================================
 
 local app = {}
@@ -31,6 +31,14 @@ local COL_BAR_BG       = 0x0E141B  -- Top/Bottom Bar Background
 local COL_STATUS_GREEN = 0x00FF66  -- Status Indicator: Your Turn / Audit Pass
 local COL_STATUS_AMBER = 0xFFAA00  -- Status Indicator: TX Waiting / Retrying
 local COL_STATUS_CYAN  = 0x3388AA  -- Status Indicator: Enemy Turn
+local COL_BRONZE_GLOW  = 0xF58220  -- Fiery Orange/Bronze Glow for NAVAL COMBAT & Join Focus
+local COL_STEEL_FACE   = 0x222830  -- Metallic Button Plate Background
+local COL_STEEL_LIGHT  = 0x586474  -- Top/Left Metallic Bevel Highlight
+local COL_STEEL_DARK   = 0x10141A  -- Bottom/Right Metallic Bevel Shadow
+local COL_STEEL_BORDER = 0x323B46  -- Button Frame Rim
+local COL_RIVET        = 0x7E8B9A  -- Metallic Corner Rivet Dot
+local COL_RADAR_GREEN  = 0x15B6A6  -- Tactical Sonar Phosphor Green
+local COL_AMBER_FIRE   = 0xFFB020  -- Muzzle Blast Fire Flare
 
 -- ---- Game States ------------------------------------------------------------
 local STATE_LOBBY        = "STATE_LOBBY"
@@ -212,6 +220,15 @@ local function make_cv(w, h)
     local max_ry = (y2 <= 0) and 0 or (y2 // bh)
     if max_ry >= ny then max_ry = ny - 1 end
 
+    if min_cx == max_cx and min_ry == max_ry then
+      local row = grid_tiles[min_ry]
+      if row then
+        local t = row[min_cx]
+        if t then t.c:rect(x - t.x, y - t.y, rw, rh, c, f, r) end
+      end
+      return
+    end
+
     for ry = min_ry, max_ry do
       local row = grid_tiles[ry]
       if row then
@@ -236,6 +253,15 @@ local function make_cv(w, h)
     local min_ry = (min_y <= 0) and 0 or (min_y // bh)
     local max_ry = (max_y <= 0) and 0 or (max_y // bh)
     if max_ry >= ny then max_ry = ny - 1 end
+
+    if min_cx == max_cx and min_ry == max_ry then
+      local row = grid_tiles[min_ry]
+      if row then
+        local t = row[min_cx]
+        if t then t.c:line(x1 - t.x, y1 - t.y, x2 - t.x, y2 - t.y, c, lw) end
+      end
+      return
+    end
 
     for ry = min_ry, max_ry do
       local row = grid_tiles[ry]
@@ -307,6 +333,15 @@ local function make_cv(w, h)
         v:text(x + tw(ls .. " ", z), y, s_str:sub(sp + 1), c, z)
         return
       end
+    end
+
+    if min_cx == max_cx and min_ry == max_ry then
+      local row = grid_tiles[min_ry]
+      if row then
+        local t = row[min_cx]
+        if t then t.c:text(x - t.x, y - t.y, s_str, c, z) end
+      end
+      return
     end
 
     for ry = min_ry, max_ry do
@@ -628,6 +663,7 @@ end
 
 -- ---- Match & Game Data Model ------------------------------------------------
 local game_state        = STATE_LOBBY
+local lobby_focus       = 1  -- 1 = Host, 2 = Join, 3 = VS AI
 local match_id          = ""
 local opponent_id       = ""
 local my_callsign       = "ADMIRAL"
@@ -919,8 +955,9 @@ local function verify_enemy_board(salt, fleet_str)
   return true, "AUDIT PASSED: VERIFIED MATCH", grid
 end
 
--- Default Game Broadcast Channel for Lobby & Discovery (isolated from Public)
-local GAME_CHANNEL = "#battleship"
+-- Default Game Broadcast Channels for Lobby & Discovery (isolated from Public)
+local GAME_CHANNEL     = "#battleship"
+local ALT_GAME_CHANNEL = "#gridstrike"
 
 -- Ensure the game hashtag channel exists; attempt programmatic creation if supported
 local function ensure_channel(channel_name)
@@ -935,12 +972,18 @@ local function ensure_channel(channel_name)
     try_call(mesh.add_channel, channel_name)
     try_call(mesh.create_channel, channel_name)
     try_call(mesh.set_channel, channel_name)
+    if channel_name == GAME_CHANNEL then
+      try_call(mesh.join_channel, ALT_GAME_CHANNEL)
+    end
   end
   if wada and wada.mesh and wada.mesh ~= mesh then
     try_call(wada.mesh.join_channel, channel_name)
     try_call(wada.mesh.add_channel, channel_name)
     try_call(wada.mesh.create_channel, channel_name)
     try_call(wada.mesh.set_channel, channel_name)
+    if channel_name == GAME_CHANNEL then
+      try_call(wada.mesh.join_channel, ALT_GAME_CHANNEL)
+    end
   end
 
   -- Check if CLI execution hook exists in sys
@@ -963,6 +1006,19 @@ local function ensure_channel(channel_name)
           end
         end
       end
+      -- Fallback: check if ALT_GAME_CHANNEL exists
+      if channel_name == GAME_CHANNEL then
+        for _, ch in ipairs(list) do
+          if type(ch) == "string" then
+            local lch = ch:lower()
+            local alt_target = ALT_GAME_CHANNEL:lower()
+            local raw_alt = alt_target:gsub("^#", "")
+            if lch == alt_target or lch == raw_alt or lch == ("#" .. raw_alt) then
+              return ch, true
+            end
+          end
+        end
+      end
     end
   end
 
@@ -972,9 +1028,13 @@ end
 local function get_broadcast_channel()
   local ch, exists = ensure_channel(GAME_CHANNEL)
   if exists then
-    return ch
+    return ch, true
   end
-  return GAME_CHANNEL
+  local alt_ch, alt_exists = ensure_channel(ALT_GAME_CHANNEL)
+  if alt_exists then
+    return alt_ch, true
+  end
+  return GAME_CHANNEL, false
 end
 
 -- ---- Mesh Transmission Wrapper & WADAMESH 5s Cooldown Pacer -----------------
@@ -1011,7 +1071,7 @@ local function resolve_dm_contact(name)
 end
 
 local function send_on_game_channel(str_text)
-  local chan, exists = ensure_channel(GAME_CHANNEL)
+  local chan, exists = get_broadcast_channel()
   if not (mesh and mesh.send) then
     return false, "no sender"
   end
@@ -1064,8 +1124,9 @@ local function mesh_send_raw(to, text)
   local to_lower = to_str:lower()
   local is_broadcast = (to_str == "") or (to_str == "broadcast") or (to_str == "Public")
     or (to_lower == GAME_CHANNEL:lower())
-    or (to_lower == "battleship")
-    or (to_lower == "#battleship")
+    or (to_lower == (GAME_CHANNEL:lower():gsub("^#", "")))
+    or (to_lower == ALT_GAME_CHANNEL:lower())
+    or (to_lower == (ALT_GAME_CHANNEL:lower():gsub("^#", "")))
 
   local is_handshake = (str_text:sub(1, 8) == "BS|SEEK|")
     or (str_text:sub(1, 13) == "BS|JOIN_SEEK|")
@@ -2368,10 +2429,140 @@ end
 
 -- ---- Screen Renderers -------------------------------------------------------
 
+-- Metallic Industrial Theme Helpers (matching Main Menu Steampunk / Battleship aesthetic)
+
+local function draw_metallic_button(x, y, w, h, text, text_col, border_glow)
+  if not cv then return end
+  -- Outer steel frame with rounded corners
+  box(x, y, w, h, border_glow or COL_STEEL_BORDER, nil, 4)
+  -- Inner steel face plate
+  box(x + 2, y + 2, w - 4, h - 4, COL_STEEL_FACE, nil, 3)
+  -- Metallic beveled edges
+  draw_line(x + 2, y + 2, x + w - 3, y + 2, COL_STEEL_LIGHT, 1)
+  draw_line(x + 2, y + 2, x + 2, y + h - 3, COL_STEEL_LIGHT, 1)
+  draw_line(x + 2, y + h - 3, x + w - 3, y + h - 3, COL_STEEL_DARK, 1)
+  draw_line(x + w - 3, y + 2, x + w - 3, y + h - 3, COL_STEEL_DARK, 1)
+
+  -- Top metal crest tab (like lobby buttons)
+  if w >= 40 and h >= 22 then
+    local tab_w = math.min(math.floor(w * 0.4), s2 and 36 or 18)
+    local tab_h = s2 and 5 or 3
+    box(x + math.floor(w / 2) - math.floor(tab_w / 2), y - math.floor(tab_h / 2), tab_w, tab_h, COL_STEEL_LIGHT, COL_STEEL_BORDER, 2)
+  end
+
+  -- Corner rivets
+  local roff = (w >= 70 and h >= 30) and 4 or 3
+  if w >= 36 and h >= 20 then
+    box(x + roff, y + roff, 2, 2, COL_RIVET, nil)
+    box(x + w - roff - 2, y + roff, 2, 2, COL_RIVET, nil)
+    box(x + roff, y + h - roff - 2, 2, 2, COL_RIVET, nil)
+    box(x + w - roff - 2, y + h - roff - 2, 2, 2, COL_RIVET, nil)
+  end
+
+  -- Centered button text with embossed drop shadow
+  if text and text ~= "" then
+    local font_sz = (h >= 45 and s2) and f_lg or ((h >= 32 and s2) and f_md or (s2 and f_sm or 12))
+    local tw_val = tw(text, font_sz)
+    local tx = x + math.max(2, math.floor((w - tw_val) / 2))
+    local ty = y + math.max(1, math.floor((h - th(font_sz)) / 2))
+    draw_text(tx + 1, ty + 1, text, 0x0A0D12, font_sz)
+    draw_text(tx, ty, text, text_col or COL_TEXT_BRIGHT, font_sz)
+  end
+end
+
+local function draw_panel_frame(x, y, w, h, title, title_col, border_glow)
+  if not cv then return end
+  local bcol = border_glow or COL_STEEL_BORDER
+  -- Outer steel frame with rounded corners
+  box(x, y, w, h, bcol, nil, 5)
+  -- Inner face plate
+  box(x + 2, y + 2, w - 4, h - 4, COL_PANEL_BG, nil, 3)
+  -- Metallic beveled edges
+  draw_line(x + 2, y + 2, x + w - 3, y + 2, COL_STEEL_LIGHT, 1)
+  draw_line(x + 2, y + 2, x + 2, y + h - 3, COL_STEEL_LIGHT, 1)
+  draw_line(x + 2, y + h - 3, x + w - 3, y + h - 3, COL_STEEL_DARK, 1)
+  draw_line(x + w - 3, y + 2, x + w - 3, y + h - 3, COL_STEEL_DARK, 1)
+  -- Corner rivets
+  local roff = 4
+  box(x + roff, y + roff, 2, 2, COL_RIVET, nil)
+  box(x + w - roff - 2, y + roff, 2, 2, COL_RIVET, nil)
+  box(x + roff, y + h - roff - 2, 2, 2, COL_RIVET, nil)
+  box(x + w - roff - 2, y + h - roff - 2, 2, 2, COL_RIVET, nil)
+  -- Header Title Crest Badge atop top panel rim
+  if title and title ~= "" then
+    local tsz = s2 and f_sm or 10
+    local tw_val = tw(title, tsz)
+    local tab_w = tw_val + (s2 and 20 or 12)
+    local tab_h = s2 and 16 or 12
+    local tab_x = x + math.floor((w - tab_w) / 2)
+    local tab_y = y - tab_h + 1
+    -- Raised metal tab atop panel rim
+    box(tab_x, tab_y, tab_w, tab_h, COL_STEEL_FACE, COL_STEEL_BORDER, 2)
+    draw_line(tab_x + 1, tab_y + 1, tab_x + tab_w - 2, tab_y + 1, COL_STEEL_LIGHT, 1)
+    draw_text(tab_x + math.floor((tab_w - tw_val) / 2) + 1, tab_y + (s2 and 2 or 1) + 1, title, 0x05070A, tsz)
+    draw_text(tab_x + math.floor((tab_w - tw_val) / 2), tab_y + (s2 and 2 or 1), title, title_col or COL_TEXT_BRIGHT, tsz)
+  end
+end
+
+-- Helper to return the bottom-right Menu button coordinates on any active screen
+local function get_menu_button()
+  if s2 then
+    local bw = 110
+    local bh = math.min(36, bot_h - 12)
+    local bx = W - bw - 14
+    local by = bot_y + math.floor((bot_h - bh) / 2)
+    return { x = bx, y = by, w = bw, h = bh }
+  else
+    local bw = 54
+    local bh = math.min(26, bot_h - 8)
+    local bx = W - bw - 6
+    local by = bot_y + math.floor((bot_h - bh) / 2)
+    return { x = bx, y = by, w = bw, h = bh }
+  end
+end
+
+-- Draw bottom-right Menu button
+local function draw_menu_button()
+  local mb = get_menu_button()
+  draw_metallic_button(mb.x, mb.y, mb.w, mb.h, "Menu", COL_TEXT_BRIGHT, COL_STEEL_BORDER)
+end
+
+-- Cleanly abort any active match and return to the main menu
+local function return_to_lobby()
+  timer_cancel("seek_broadcast")
+  timer_cancel("ack_timeout")
+  timer_cancel("resend_timer")
+  timer_cancel("ai_turn")
+  NetEngine.clear_tx(true)
+  clear_match_state()
+  match_id = ""
+  opponent_id = ""
+  is_ai_match = false
+  is_host = false
+  local_seq = 0
+  expected_remote_seq = 1
+  my_sunk_count = 0
+  enemy_sunk_count = 0
+  show_retry_modal = false
+  fleet_locked = false
+  ai_turn_scheduled_ms = 0
+  init_empty_grids()
+  my_ships = {}
+  setup_ship_idx = 1
+  setup_cur_x = 0
+  setup_cur_y = 0
+  combat_log = "> STANDBY"
+  game_state = STATE_LOBBY
+  lobby_focus = 1
+  sfx_play("BEEP")
+  draw_screen()
+end
+
 -- Draw Top Telemetry Bar
 local function draw_top_bar()
   box(0, 0, W, top_h, COL_BAR_BG, nil)
-  draw_line(0, top_h, W, top_h, COL_BORDER_NORM, 1)
+  draw_line(0, top_h, W, top_h, COL_STEEL_BORDER, 1)
+  draw_line(0, top_h - 1, W, top_h - 1, COL_STEEL_DARK, 1)
 
   -- State indicator (Left)
   local state_text = "[IDLE]"
@@ -2446,13 +2637,11 @@ end
 local function draw_target_radar()
   local px = target_panel.x + (shake_panel == "target" and shake_dx or 0)
   local py = target_panel.y + (shake_panel == "target" and shake_dy or 0)
-  local bcol = (shake_panel == "target" and shake_color) or COL_BORDER_NORM
+  local bcol = (shake_panel == "target" and shake_color) or COL_STEEL_BORDER
   local span = cell_sz * 10
   local pw = target_panel.w
-  local title_y = s2 and (target_panel.y - th(f_sm) - 2) or 19
 
-  draw_text(target_panel.x + 2, title_y, "TARGET RADAR", COL_TEXT_DIM, f_sm)
-  box(px, py, pw, pw, COL_PANEL_BG, bcol)
+  draw_panel_frame(px, py, pw, pw, "TARGET RADAR", COL_BRONZE_GLOW, bcol)
 
   local gx = px + 2
   local gy = py + 2
@@ -2504,13 +2693,11 @@ end
 local function draw_home_fleet()
   local px = home_panel.x + (shake_panel == "home" and shake_dx or 0)
   local py = home_panel.y + (shake_panel == "home" and shake_dy or 0)
-  local bcol = (shake_panel == "home" and shake_color) or COL_BORDER_NORM
+  local bcol = (shake_panel == "home" and shake_color) or COL_STEEL_BORDER
   local span = cell_sz * 10
   local pw = home_panel.w
-  local title_y = s2 and (home_panel.y - th(f_sm) - 2) or 19
 
-  draw_text(home_panel.x + 2, title_y, "HOME FLEET", COL_TEXT_DIM, f_sm)
-  box(px, py, pw, pw, COL_PANEL_BG, bcol)
+  draw_panel_frame(px, py, pw, pw, "HOME FLEET", COL_STATUS_GREEN, bcol)
 
   local gx = px + 2
   local gy = py + 2
@@ -2554,47 +2741,44 @@ local function draw_side_controls()
   if not s2 or side_panel.w <= 0 then return end
   local sx, sy, sw, sh = side_panel.x, side_panel.y, side_panel.w, side_panel.h
 
-  draw_text(sx + 2, sy - th(f_sm) - 2, "TACTICAL COMMAND", COL_STATUS_GREEN, f_sm)
-  box(sx, sy, sw, sh, COL_PANEL_BG, COL_BORDER_NORM)
+  draw_panel_frame(sx, sy, sw, sh, "TACTICAL COMMAND", COL_STATUS_GREEN)
 
   -- Target Coordinate Info
-  box(sx + 14, sy + 14, sw - 28, 48, COL_BAR_BG, COL_BORDER_NORM)
+  box(sx + 14, sy + 14, sw - 28, 48, COL_BAR_BG, COL_STEEL_BORDER, 4)
   draw_text(sx + 24, sy + 20, "TARGET AIM:", COL_TEXT_DIM, f_xs)
   local aim_str = format_coord(target_cur_x, target_cur_y)
   draw_text(sx + 24 + tw("TARGET AIM: ", f_xs), sy + 18, aim_str, COL_RETICLE, f_lg)
 
-  -- Big Touch FIRE Button
+  -- Big Metallic Touch FIRE Button
   local fire_btn_y = sy + 70
   local fire_btn_h = 54
   local can_fire = (game_state == STATE_MY_TURN and tx_pending == nil)
-  local fire_bg = can_fire and 0x771111 or 0x1A222B
-  local fire_border = can_fire and COL_HIT or COL_BORDER_NORM
+  local fire_glow = can_fire and COL_HIT or COL_STEEL_BORDER
   local fire_txt_col = can_fire and 0xFFFFFF or COL_TEXT_DIM
-  box(sx + 14, fire_btn_y, sw - 28, fire_btn_h, fire_bg, fire_border)
-  local f_label = can_fire and ("[ TAP TO FIRE: " .. aim_str .. " ]") or (tx_pending and "WAITING ACK..." or "ENEMY TURN...")
-  draw_text_centered(sx + 14, fire_btn_y + math.floor((fire_btn_h - th(f_md)) / 2), sw - 28, f_label, fire_txt_col, f_md)
+  local f_label = can_fire and ("FIRE: " .. aim_str) or (tx_pending and "WAITING ACK..." or "ENEMY TURN...")
+  draw_metallic_button(sx + 14, fire_btn_y, sw - 28, fire_btn_h, f_label, fire_txt_col, fire_glow)
 
   -- Match Telemetry Box
   local tel_y = fire_btn_y + fire_btn_h + 12
-  box(sx + 14, tel_y, sw - 28, 100, COL_BAR_BG, COL_BORDER_NORM)
+  box(sx + 14, tel_y, sw - 28, 100, COL_BAR_BG, COL_STEEL_BORDER, 4)
   draw_text(sx + 24, tel_y + 12, "MATCH ID: " .. (match_id ~= "" and match_id or "NONE"), COL_TEXT_BRIGHT, f_xs)
   draw_text(sx + 24, tel_y + 34, "PEER: " .. (is_ai_match and "OFFLINE AI" or enemy_callsign), COL_STATUS_AMBER, f_xs)
   draw_text(sx + 24, tel_y + 56, "COMMS: " .. (peer_dm_verified and "DIRECT (DM)" or "#battleship"), COL_STATUS_GREEN, f_xs)
   draw_text(sx + 24, tel_y + 78, "FLEET LOSSES: " .. tostring(my_sunk_count) .. " / 5 SUNK", my_sunk_count > 0 and COL_HIT or COL_STATUS_GREEN, f_xs)
 
-  -- Mute Button / Quick Sound Toggle
+  -- Mute Button / Quick Sound Toggle (Metallic)
   local snd_btn_y = tel_y + 112
   local snd_btn_h = 44
-  box(sx + 14, snd_btn_y, sw - 28, snd_btn_h, COL_BAR_BG, COL_BORDER_NORM)
-  draw_text_centered(sx + 14, snd_btn_y + math.floor((snd_btn_h - th(f_xs)) / 2), sw - 28, sound_on and "[SOUND: ON]" or "[SOUND: MUTED]", sound_on and COL_STATUS_GREEN or COL_HIT, f_xs)
+  local snd_txt = sound_on and "SOUND: ON" or "SOUND: MUTED"
+  local snd_glow = sound_on and COL_STATUS_GREEN or COL_HIT
+  draw_metallic_button(sx + 14, snd_btn_y, sw - 28, snd_btn_h, snd_txt, snd_glow, COL_STEEL_BORDER)
 
   -- Return to Lobby Button on Game Over
   if game_state == STATE_GAME_OVER or game_state == STATE_AUDIT then
     local ret_y = snd_btn_y + snd_btn_h + 10
     local ret_h = math.min(50, sh - (ret_y - sy) - 10)
     if ret_h >= 36 then
-      box(sx + 14, ret_y, sw - 28, ret_h, 0x0B2E1C, COL_STATUS_GREEN)
-      draw_text_centered(sx + 14, ret_y + math.floor((ret_h - th(f_md)) / 2), sw - 28, "[ RETURN TO LOBBY ]", COL_STATUS_GREEN, f_md)
+      draw_metallic_button(sx + 14, ret_y, sw - 28, ret_h, "MAIN MENU", COL_STATUS_GREEN, COL_STATUS_GREEN)
     end
   end
 end
@@ -2608,10 +2792,8 @@ local function draw_setup_screen()
   local py = target_panel.y
   local pw = target_panel.w
   local span = cell_sz * 10
-  local title_y = s2 and (target_panel.y - th(f_sm) - 2) or 19
 
-  draw_text(px + 2, title_y, "DEPLOYMENT GRID", COL_TEXT_DIM, f_sm)
-  box(px, py, pw, pw, COL_PANEL_BG, COL_STATUS_GREEN)
+  draw_panel_frame(px, py, pw, pw, "DEPLOYMENT GRID", COL_STATUS_GREEN)
 
   local gx = px + 2
   local gy = py + 2
@@ -2674,10 +2856,8 @@ local function draw_setup_screen()
   local ry = home_panel.y
   local rw = home_panel.w
   local rh = home_panel.h
-  local rtitle_y = s2 and (home_panel.y - th(f_sm) - 2) or 19
 
-  draw_text(rx + 2, rtitle_y, "FLEET STATUS", COL_STATUS_GREEN, f_sm)
-  box(rx, ry, rw, rh, COL_PANEL_BG, COL_BORDER_NORM)
+  draw_panel_frame(rx, ry, rw, rh, "FLEET STATUS", COL_STATUS_GREEN)
 
   local sy = ry + (s2 and 12 or 5)
   local row_gap = s2 and 28 or 13
@@ -2696,98 +2876,92 @@ local function draw_setup_screen()
 
   if not s2 then
     -- Clean divider line below 5.DD(2) on compact screens
-    draw_line(rx + 4, ry + 73, rx + rw - 4, ry + 73, COL_GRID_LINE, 1)
+    draw_line(rx + 4, ry + 73, rx + rw - 4, ry + 73, COL_STEEL_BORDER, 1)
 
     local btn_x = rx + 4
     local btn_w = rw - 8
 
     if fleet_locked then
-      box(btn_x, ry + 77, btn_w, 36, COL_BAR_BG, COL_STATUS_AMBER)
-      draw_text_centered(btn_x, ry + 82, btn_w, is_host and "WAITING PEER" or "SCANNING...", COL_STATUS_AMBER, 12)
-      draw_text_centered(btn_x, ry + 97, btn_w, "[TAP/ENT] PING", COL_TEXT_BRIGHT, 12)
+      draw_metallic_button(btn_x, ry + 77, btn_w, 36, is_host and "WAITING" or "SCANNING", COL_STATUS_AMBER, COL_STATUS_AMBER)
     elseif setup_ship_idx <= 5 then
       local rot_txt = string.format("DIR: %s", setup_dir == "H" and "HORIZ" or "VERT")
-      draw_text(rx + 8, ry + 80, rot_txt, COL_RETICLE, 12)
-      draw_text(rx + 8, ry + 96, "[R] Rotate", COL_TEXT_BRIGHT, 12)
+      draw_text(rx + 8, ry + 79, rot_txt, COL_RETICLE, 12)
+      draw_metallic_button(btn_x, ry + 95, btn_w, 24, "Rotate [R]", COL_TEXT_BRIGHT)
     else
-      box(btn_x, ry + 77, btn_w, 36, 0x0B2E1C, COL_STATUS_GREEN)
-      draw_text_centered(btn_x, ry + 82, btn_w, "FLEET READY!", COL_STATUS_GREEN, 12)
-      draw_text_centered(btn_x, ry + 97, btn_w, "[CONFIRM]", COL_TEXT_BRIGHT, 12)
+      draw_metallic_button(btn_x, ry + 77, btn_w, 36, "CONFIRM", COL_STATUS_GREEN, COL_STATUS_GREEN)
     end
   else
     -- High-DPI / Wide screen (T-Display P4): Dedicated Side Action Panel
     local sx, ss_y, sw, sh = side_panel.x, side_panel.y, side_panel.w, side_panel.h
-    draw_text(sx + 2, ss_y - th(f_sm) - 2, "DEPLOYMENT CONTROLS", COL_STATUS_GREEN, f_sm)
-    box(sx, ss_y, sw, sh, COL_PANEL_BG, COL_BORDER_NORM)
+    draw_panel_frame(sx, ss_y, sw, sh, "DEPLOYMENT", COL_STATUS_GREEN)
 
     -- Current Ship Box
-    box(sx + 14, ss_y + 14, sw - 28, 56, COL_BAR_BG, COL_BORDER_NORM)
+    box(sx + 14, ss_y + 14, sw - 28, 56, COL_BAR_BG, COL_STEEL_BORDER, 4)
     if setup_ship_idx <= 5 then
       local spec = SHIP_SPECS[setup_ship_idx]
       draw_text(sx + 24, ss_y + 20, "CURRENT SHIP:", COL_TEXT_DIM, f_xs)
-      draw_text(sx + 24, ss_y + 38, string.format("%s (LENGTH: %d)", spec.name:upper(), spec.len), COL_RETICLE, f_md)
+      draw_text(sx + 24, ss_y + 38, string.format("%s (LEN: %d)", spec.name:upper(), spec.len), COL_RETICLE, f_md)
     else
       draw_text(sx + 24, ss_y + 20, "FLEET STATUS:", COL_TEXT_DIM, f_xs)
-      draw_text(sx + 24, ss_y + 38, "ALL 5 SHIPS DEPLOYED!", COL_STATUS_GREEN, f_md)
+      draw_text(sx + 24, ss_y + 38, "ALL 5 SHIPS READY!", COL_STATUS_GREEN, f_md)
     end
 
-    -- Touch Button 1: Rotate Direction
+    -- Touch Button 1: Rotate Direction (Metallic)
     local r_btn_y = ss_y + 82
     local r_btn_h = 52
-    local rot_txt = string.format("[ DIR: %s ] (TAP TO ROTATE)", setup_dir == "H" and "HORIZONTAL" or "VERTICAL")
-    box(sx + 14, r_btn_y, sw - 28, r_btn_h, COL_BAR_BG, COL_STATUS_AMBER)
-    draw_text_centered(sx + 14, r_btn_y + math.floor((r_btn_h - th(f_md)) / 2), sw - 28, rot_txt, COL_STATUS_AMBER, f_md)
+    local rot_txt = string.format("DIR: %s (ROTATE)", setup_dir == "H" and "HORIZ" or "VERT")
+    draw_metallic_button(sx + 14, r_btn_y, sw - 28, r_btn_h, rot_txt, COL_STATUS_AMBER, COL_STEEL_BORDER)
 
-    -- Touch Button 2: Reset Board
+    -- Touch Button 2: Reset Board (Metallic)
     local c_btn_y = ss_y + 146
     local c_btn_h = 52
-    box(sx + 14, c_btn_y, sw - 28, c_btn_h, COL_BAR_BG, COL_BORDER_NORM)
-    draw_text_centered(sx + 14, c_btn_y + math.floor((c_btn_h - th(f_md)) / 2), sw - 28, "[ RESET FLEET ]", COL_TEXT_DIM, f_md)
+    draw_metallic_button(sx + 14, c_btn_y, sw - 28, c_btn_h, "RESET FLEET", COL_TEXT_DIM, COL_STEEL_BORDER)
 
-    -- Touch Button 3: Confirm / Ready
+    -- Touch Button 3: Confirm / Ready (Metallic)
     local ok_btn_y = ss_y + 210
     local ok_btn_h = 60
     if fleet_locked then
-      box(sx + 14, ok_btn_y, sw - 28, ok_btn_h, COL_BAR_BG, COL_STATUS_AMBER)
-      draw_text_centered(sx + 14, ok_btn_y + 10, sw - 28, is_host and "HOSTING LOBBY..." or "SEEKING HOST...", COL_STATUS_AMBER, f_md)
-      draw_text_centered(sx + 14, ok_btn_y + 34, sw - 28, "[TAP TO RE-PING]", COL_TEXT_BRIGHT, f_sm)
-
+      draw_metallic_button(sx + 14, ok_btn_y, sw - 28, ok_btn_h, is_host and "HOSTING..." or "SEEKING...", COL_STATUS_AMBER, COL_STATUS_AMBER)
       local unl_btn_y = ss_y + 282
       local unl_btn_h = 48
-      box(sx + 14, unl_btn_y, sw - 28, unl_btn_h, COL_BAR_BG, COL_HIT)
-      draw_text_centered(sx + 14, unl_btn_y + math.floor((unl_btn_h - th(f_md)) / 2), sw - 28, "[ UNLOCK FLEET ]", COL_HIT, f_md)
+      draw_metallic_button(sx + 14, unl_btn_y, sw - 28, unl_btn_h, "UNLOCK FLEET", COL_HIT, COL_HIT)
     elseif setup_ship_idx > 5 then
-      box(sx + 14, ok_btn_y, sw - 28, ok_btn_h, 0x0B2E1C, COL_STATUS_GREEN)
-      draw_text_centered(sx + 14, ok_btn_y + math.floor((ok_btn_h - th(f_md)) / 2), sw - 28, "[ CONFIRM & LAUNCH BATTLE ]", COL_STATUS_GREEN, f_md)
+      draw_metallic_button(sx + 14, ok_btn_y, sw - 28, ok_btn_h, "LAUNCH BATTLE", COL_STATUS_GREEN, COL_STATUS_GREEN)
     else
-      box(sx + 14, ok_btn_y, sw - 28, ok_btn_h, 0x11161C, COL_BORDER_NORM)
-      draw_text_centered(sx + 14, ok_btn_y + math.floor((ok_btn_h - th(f_sm)) / 2), sw - 28, "TAP GRID CELLS TO PLACE SHIPS", COL_TEXT_DIM, f_sm)
+      box(sx + 14, ok_btn_y, sw - 28, ok_btn_h, 0x11161C, COL_STEEL_BORDER, 4)
+      draw_text_centered(sx + 14, ok_btn_y + math.floor((ok_btn_h - th(f_sm)) / 2), sw - 28, "TAP CELLS TO PLACE", COL_TEXT_DIM, f_sm)
     end
   end
 
-  -- Bottom Bar
-  box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
-  draw_line(0, bot_y, W, bot_y, COL_BORDER_NORM, 1)
+  -- Bottom Bar (Metallic Rim)
+  box(0, bot_y, W, bot_h, COL_BAR_BG, nil)
+  draw_line(0, bot_y, W, bot_y, COL_STEEL_BORDER, 1)
+  draw_line(0, bot_y + 1, W, bot_y + 1, COL_STEEL_DARK, 1)
+
   local y1 = bot_y + (s2 and 8 or 4)
   local y2 = bot_y + (s2 and 26 or 20)
   local f_bar = s2 and f_sm or 12
 
   if fleet_locked then
     draw_text(s2 and 16 or 10, y1, combat_log, COL_STATUS_AMBER, f_bar)
-    draw_text(s2 and 16 or 10, y2, "[Enter] Re-send   [C] Unlock   [Q] Lobby", COL_TEXT_BRIGHT, f_bar)
+    draw_text(s2 and 16 or 10, y2, "[Enter] Ping   [C] Unlock", COL_TEXT_BRIGHT, f_bar)
   elseif setup_ship_idx <= 5 then
     draw_text(s2 and 16 or 10, y1, string.format("PLACING: %s (LEN %d)", SHIP_SPECS[setup_ship_idx].name, SHIP_SPECS[setup_ship_idx].len), COL_RETICLE, f_bar)
-    draw_text(s2 and 16 or 10, y2, "[WASD/Tap] Aim/Place  [R] Rotate  [Ent] Place", COL_TEXT_BRIGHT, f_bar)
+    draw_text(s2 and 16 or 10, y2, "[WASD] Aim/Place  [R] Rot", COL_TEXT_BRIGHT, f_bar)
   else
-    draw_text(s2 and 16 or 10, y1, "FLEET DEPLOYED! READY FOR BATTLE.", COL_STATUS_GREEN, f_bar)
-    draw_text(s2 and 16 or 10, y2, "[Enter/Space] CONFIRM   [C] Reset", COL_TEXT_BRIGHT, f_bar)
+    draw_text(s2 and 16 or 10, y1, "FLEET READY! DEPLOY TO BATTLE.", COL_STATUS_GREEN, f_bar)
+    draw_text(s2 and 16 or 10, y2, "[Enter] CONFIRM   [C] Reset", COL_TEXT_BRIGHT, f_bar)
   end
+
+  -- Bottom-right Menu button
+  draw_menu_button()
 end
 
 -- Draw Bottom Combat Log & Key Hints Bar
 local function draw_bottom_bar()
-  box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
-  draw_line(0, bot_y, W, bot_y, COL_BORDER_NORM, 1)
+  box(0, bot_y, W, bot_h, COL_BAR_BG, nil)
+  draw_line(0, bot_y, W, bot_y, COL_STEEL_BORDER, 1)
+  draw_line(0, bot_y + 1, W, bot_y + 1, COL_STEEL_DARK, 1)
 
   local text_y1 = bot_y + (s2 and 8 or 4)
   local text_y2 = bot_y + (s2 and 26 or 20)
@@ -2796,7 +2970,8 @@ local function draw_bottom_bar()
   if game_state == STATE_AUDIT or game_state == STATE_GAME_OVER then
     local banner_col = audit_passed and COL_STATUS_GREEN or COL_HIT
     draw_text(s2 and 16 or 10, text_y1, audit_status_msg, banner_col, f_bar)
-    draw_text(s2 and 16 or 10, text_y2, "[Enter/Space] RETURN TO LOBBY  [M] Mute", COL_RETICLE, f_bar)
+    draw_text(s2 and 16 or 10, text_y2, "[Enter] Main Menu  [M] Mute", COL_RETICLE, f_bar)
+    draw_menu_button()
     return
   end
 
@@ -2807,88 +2982,136 @@ local function draw_bottom_bar()
   local hints = ""
   if game_state == STATE_MY_TURN then
     if tx_pending ~= nil then
-      hints = "[WAITING FOR PACKET ACK]  [M] Mute"
+      hints = "[WAITING FOR ACK]  [M] Mute"
     else
-      hints = string.format("[WASD/Touch] Aim (%s)  [Enter/Tap] FIRE  [M] Mute", format_coord(target_cur_x, target_cur_y))
+      hints = string.format("[WASD] Aim (%s)  [Ent] Fire [M]", format_coord(target_cur_x, target_cur_y))
     end
   elseif game_state == STATE_ENEMY_TURN then
-    hints = "[DEFENDING] Awaiting enemy shot... [M] Mute"
+    hints = "[DEFENDING] Enemy turn... [M]"
   end
   draw_text(s2 and 16 or 10, text_y2, hints, COL_RETICLE, f_bar)
+
+  -- Bottom-right Menu button
+  draw_menu_button()
 end
 
--- Draw Main Lobby Screen
+-- Helper to return lobby button geometries for rendering and touch hit-testing
+local function get_lobby_buttons()
+  local btns = {}
+  if s2 then
+    local row_w = math.min(1080, W - 64)
+    local gap = 24
+    local bw = math.floor((row_w - gap * 2) / 3)
+    local bh = 80
+    local sx = math.floor((W - row_w) / 2)
+    local by = H - bh - 32
+    btns[1] = { x = sx,                  y = by, w = bw, h = bh, id = "host", title = "Host" }
+    btns[2] = { x = sx + bw + gap,       y = by, w = bw, h = bh, id = "join", title = "Join" }
+    btns[3] = { x = sx + (bw + gap) * 2, y = by, w = bw, h = bh, id = "ai",   title = "VS AI" }
+  else
+    local gap = 8
+    local row_w = W - 20
+    local bw = math.floor((row_w - gap * 2) / 3) -- e.g. 94px on 320px screen
+    local bh = (H <= 216) and 38 or 44
+    local sx = 10
+    local by = H - bh - 16
+    btns[1] = { x = sx,                  y = by, w = bw, h = bh, id = "host", title = "Host" }
+    btns[2] = { x = sx + bw + gap,       y = by, w = bw, h = bh, id = "join", title = "Join" }
+    local x3 = sx + (bw + gap) * 2
+    btns[3] = { x = x3,                  y = by, w = math.max(bw, W - x3 - 10), h = bh, id = "ai", title = "VS AI" }
+  end
+  return btns
+end
+
+-- Draw Main Lobby Screen (Artwork Theme & 3 Metallic Action Buttons)
 local function draw_lobby_screen()
   draw_top_bar()
 
-  local win_rate = 0
-  if career_stats.matches > 0 then
-    win_rate = math.floor((career_stats.wins / career_stats.matches) * 100)
-  end
-  local stat_line = string.format("CAREER: %dW - %dL (%d%%) | ACC: %d%%",
-    career_stats.wins, career_stats.losses, win_rate,
-    (career_stats.hits + career_stats.misses) > 0 and math.floor((career_stats.hits / (career_stats.hits + career_stats.misses)) * 100) or 0)
+  local btns = get_lobby_buttons()
 
-  local options = {
-    { key = "[1]", title = "HOST LORA MATCH (#battleship)" },
-    { key = "[2]", title = "JOIN LORA MATCH (#battleship)" },
-    { key = "[3]", title = "VS AI (OFFLINE HUNT/TARGET)" },
-  }
+  -- 1. Atmospheric Naval Backdrop (Sky, Horizon, Ocean)
+  local horizon_y = s2 and math.floor(H * 0.54) or math.floor(H * 0.48)
+  box(0, top_h, W, horizon_y - top_h, 0x091018, nil)        -- Stormy Dark Navy Sky
+  box(0, horizon_y, W, H - horizon_y, 0x0B1622, nil)        -- Abyssal Ocean Ground
+  draw_line(0, horizon_y, W, horizon_y, 0x152230, 1)        -- Ocean Horizon Boundary
 
-  local _, ch_exists = ensure_channel(GAME_CHANNEL)
-
+  -- 2. Upper-Left Tactical Sonar Radar Graphic
   if s2 then
-    local lw = math.min(860, W - 48)
-    local lx = math.floor((W - lw) / 2)
-
-    -- Tactical Banner
-    box(lx, 42, lw, 62, COL_PANEL_BG, COL_BORDER_NORM)
-    draw_text(lx + 24, 48, "GRID STRIKE: NAVAL LORAMESH", COL_STATUS_GREEN, f_lg)
-    draw_text(lx + 24, 76, "1v1 LOCKSTEP TACTICAL RADAR", COL_TEXT_DIM, f_sm)
-
-    -- Career Stats Widget
-    box(lx, 114, lw, 44, COL_PANEL_BG, COL_BORDER_NORM)
-    draw_text(lx + 24, 126, stat_line, COL_STATUS_AMBER, f_sm)
-
-    local oy = 170
-    for i, opt in ipairs(options) do
-      box(lx, oy, lw, 52, COL_PANEL_BG, COL_BORDER_NORM)
-      draw_text(lx + 24, oy + 14, opt.key, COL_RETICLE, f_md)
-      draw_text(lx + 80, oy + 14, opt.title, COL_TEXT_BRIGHT, f_md)
-      oy = oy + 62
-    end
-
-    box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
-    if ch_exists then
-      draw_text(24, bot_y + 16, "KEYS/TOUCH: [1] Host  [2] Join  [3] Offline AI  [M] Mute", COL_STATUS_GREEN, f_sm)
-    else
-      draw_text(24, bot_y + 16, "[!] #battleship NOT FOUND. ADD IN CHATS (+)", COL_STATUS_AMBER, f_sm)
-    end
+    local cx, cy, rad = 90, top_h + 84, 52
+    cv:circle(cx, cy, rad, 0x0E2428, false)
+    cv:circle(cx, cy, math.floor(rad * 0.65), 0x0E2428, false)
+    cv:circle(cx, cy, math.floor(rad * 0.35), 0x0E2428, false)
+    draw_line(cx - rad, cy, cx + rad, cy, 0x0E2428, 1)
+    draw_line(cx, cy - rad, cx, cy + rad, 0x0E2428, 1)
+    draw_line(cx, cy, cx + math.floor(rad * 0.7), cy - math.floor(rad * 0.7), COL_RADAR_GREEN, 2)
   else
-    -- Tactical Banner
-    box(14, 26, 292, 40, COL_PANEL_BG, COL_BORDER_NORM)
-    draw_text(24, 31, "GRID STRIKE: NAVAL LORAMESH", COL_STATUS_GREEN, 14)
-    draw_text(24, 48, "1v1 LOCKSTEP TACTICAL RADAR", COL_TEXT_DIM, 12)
+    local cx, cy, rad = 40, top_h + 38, 24
+    cv:circle(cx, cy, rad, 0x0E2428, false)
+    cv:circle(cx, cy, math.floor(rad * 0.55), 0x0E2428, false)
+    draw_line(cx - rad, cy, cx + rad, cy, 0x0E2428, 1)
+    draw_line(cx, cy - rad, cx, cy + rad, 0x0E2428, 1)
+    draw_line(cx, cy, cx + math.floor(rad * 0.7), cy - math.floor(rad * 0.7), COL_RADAR_GREEN, 1)
+  end
 
-    -- Career Stats Widget
-    box(14, 72, 292, 26, COL_PANEL_BG, COL_BORDER_NORM)
-    draw_text(24, 78, stat_line, COL_STATUS_AMBER, 12)
+  -- 3. Center Silhouette Battleship
+  if s2 then
+    local bx = math.floor(W * 0.28)
+    local by = horizon_y - 20
+    box(bx, by + 12, 460, 26, 0x182432, nil)
+    box(bx + 110, by - 16, 220, 28, 0x223244, nil)
+    box(bx + 160, by - 44, 110, 28, 0x2B3D52, nil)
+    draw_line(bx + 200, by - 44, bx + 200, by - 68, 0x48607A, 2)
+    draw_line(bx + 80, by + 6, bx + 30, by - 14, 0x223244, 4)
+    draw_line(bx + 350, by + 6, bx + 410, by - 14, 0x223244, 4)
+    cv:circle(bx + 26, by - 16, 5, COL_AMBER_FIRE, true)
+    cv:circle(bx + 414, by - 16, 4, COL_AMBER_FIRE, true)
+  else
+    local bx = math.floor(W * 0.32)
+    local by = horizon_y - 12
+    box(bx, by + 6, 105, 14, 0x182432, nil)
+    box(bx + 24, by - 6, 52, 12, 0x223244, nil)
+    box(bx + 36, by - 18, 26, 12, 0x2B3D52, nil)
+    draw_line(bx + 48, by - 18, bx + 48, by - 26, 0x48607A, 1)
+    draw_line(bx + 18, by + 4, bx + 4, by - 4, 0x223244, 2)
+    draw_line(bx + 82, by + 4, bx + 96, by - 4, 0x223244, 2)
+    cv:circle(bx + 4, by - 4, 2, COL_AMBER_FIRE, true)
+  end
 
-    local oy = 104
-    for i, opt in ipairs(options) do
-      box(14, oy, 292, 22, COL_PANEL_BG, COL_BORDER_NORM)
-      draw_text(24, oy + 4, opt.key, COL_RETICLE, 12)
-      draw_text(52, oy + 4, opt.title, COL_TEXT_BRIGHT, 12)
-      oy = oy + 26
-    end
+  -- 4. Logo Crest Title: GRID * STRIKE & NAVAL COMBAT
+  if s2 then
+    local title = "GRID * STRIKE"
+    local tit_w = tw(title, f_xl)
+    local tit_x = math.floor((W - tit_w) / 2)
+    local tit_y = top_h + 16
+    draw_text(tit_x + 2, tit_y + 2, title, 0x05070A, f_xl)
+    draw_text(tit_x, tit_y, title, COL_TEXT_BRIGHT, f_xl)
 
-    local lby = math.max(182, H - 24)
-    box(0, lby, W, H - lby, COL_BAR_BG, COL_BORDER_NORM)
-    if ch_exists then
-      draw_text(10, lby + 5, "KEYS: [1] Host  [2] Join  [3] Offline AI  [M] Mute", COL_STATUS_GREEN, 12)
-    else
-      draw_text(10, lby + 5, "[!] #battleship NOT FOUND. ADD IN CHATS (+)", COL_STATUS_AMBER, 12)
-    end
+    local sub = "NAVAL COMBAT"
+    local sub_w = tw(sub, f_md)
+    local sub_x = math.floor((W - sub_w) / 2)
+    draw_text(sub_x, tit_y + 34, sub, COL_BRONZE_GLOW, f_md)
+
+    draw_text(W - 48, top_h + 6, "v1.0", COL_TEXT_DIM, f_xs)
+  else
+    local title = "GRID * STRIKE"
+    local tit_w = tw(title, 16)
+    local tit_x = math.floor((W - tit_w) / 2)
+    local tit_y = top_h + 6
+    draw_text(tit_x + 1, tit_y + 1, title, 0x05070A, 16)
+    draw_text(tit_x, tit_y, title, COL_TEXT_BRIGHT, 16)
+
+    local sub = "NAVAL COMBAT"
+    local sub_w = tw(sub, 11)
+    local sub_x = math.floor((W - sub_w) / 2)
+    draw_text(sub_x, tit_y + 20, sub, COL_BRONZE_GLOW, 11)
+
+    draw_text(W - 32, top_h + 2, "v1.0", COL_TEXT_DIM, 10)
+  end
+
+  -- 5. The Three Metallic Buttons: Host, Join, VS AI (No highlight, pure metallic)
+  for i = 1, #btns do
+    local b = btns[i]
+    draw_metallic_button(b.x, b.y, b.w, b.h, b.title, COL_TEXT_BRIGHT, COL_STEEL_BORDER)
   end
 end
 
@@ -2903,7 +3126,7 @@ local function draw_resume_modal()
     local mw, mh = 560, 260
     local mx = math.floor((W - mw) / 2)
     local my = math.floor((H - mh) / 2)
-    box(mx, my, mw, mh, COL_PANEL_BG, COL_RETICLE)
+    draw_panel_frame(mx, my, mw, mh, "CRASH RECOVERY", COL_STATUS_AMBER)
     draw_text(mx + 28, my + 24, "UNFINISHED MATCH DETECTED!", COL_STATUS_AMBER, f_lg)
 
     local info = string.format("ID: %s  |  SEQ: %02d", match_id, local_seq)
@@ -2913,31 +3136,30 @@ local function draw_resume_modal()
     local bw = 230
     local bh = 54
     local by = my + 160
-    box(mx + 28, by, bw, bh, COL_BAR_BG, COL_STATUS_GREEN)
-    draw_text_centered(mx + 28, by + math.floor((bh - th(f_md)) / 2), bw, "[1] RESUME", COL_STATUS_GREEN, f_md)
+    draw_metallic_button(mx + 28, by, bw, bh, "RESUME", COL_STATUS_GREEN, COL_STATUS_GREEN)
+    draw_metallic_button(mx + mw - bw - 28, by, bw, bh, "ABANDON", COL_HIT, COL_HIT)
 
-    box(mx + mw - bw - 28, by, bw, bh, COL_BAR_BG, COL_HIT)
-    draw_text_centered(mx + mw - bw - 28, by + math.floor((bh - th(f_md)) / 2), bw, "[2] ABANDON", COL_HIT, f_md)
-
-    box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
+    box(0, bot_y, W, bot_h, COL_BAR_BG, nil)
+    draw_line(0, bot_y, W, bot_y, COL_STEEL_BORDER, 1)
     draw_text(24, bot_y + 16, "Press [1]/[Enter] to Resume, [2] to Abandon", COL_TEXT_BRIGHT, f_sm)
+    draw_menu_button()
   else
-    box(20, 32, 280, 140, COL_PANEL_BG, COL_RETICLE)
+    local mx, my, mw, mh = 20, 32, 280, 140
+    draw_panel_frame(mx, my, mw, mh, "RECOVERY", COL_STATUS_AMBER)
     draw_text(30, 42, "UNFINISHED MATCH DETECTED!", COL_STATUS_AMBER, 14)
 
     local info = string.format("ID: %s  |  SEQ: %02d", match_id, local_seq)
     draw_text(30, 66, info, COL_TEXT_BRIGHT, 12)
-    draw_text(30, 84, "State restored from flash storage.", COL_TEXT_DIM, 12)
+    draw_text(30, 84, "State restored from flash.", COL_TEXT_DIM, 12)
 
-    box(30, 110, 115, 30, COL_BAR_BG, COL_STATUS_GREEN)
-    draw_text(40, 118, "[1] RESUME", COL_STATUS_GREEN, 12)
+    draw_metallic_button(30, 110, 115, 30, "RESUME", COL_STATUS_GREEN, COL_STATUS_GREEN)
+    draw_metallic_button(155, 110, 115, 30, "ABANDON", COL_HIT, COL_HIT)
 
-    box(165, 110, 115, 30, COL_BAR_BG, COL_HIT)
-    draw_text(175, 118, "[2] ABANDON", COL_HIT, 12)
-
-    local lby = math.max(182, H - 24)
-    box(0, lby, W, H - lby, COL_BAR_BG, COL_BORDER_NORM)
-    draw_text(10, lby + 5, "Press [1]/[Enter] to Resume, [2] to Abandon", COL_TEXT_BRIGHT, 12)
+    local lby = math.max(182, H - 28)
+    box(0, lby, W, H - lby, COL_BAR_BG, nil)
+    draw_line(0, lby, W, lby, COL_STEEL_BORDER, 1)
+    draw_text(10, lby + 6, "[1] Resume  [2] Abandon", COL_TEXT_BRIGHT, 12)
+    draw_menu_button()
   end
 end
 
@@ -2947,7 +3169,7 @@ local function draw_retry_modal()
     local mw, mh = 560, 260
     local mx = math.floor((W - mw) / 2)
     local my = math.floor((H - mh) / 2)
-    box(mx, my, mw, mh, COL_PANEL_BG, COL_HIT)
+    draw_panel_frame(mx, my, mw, mh, "TIMEOUT", COL_HIT)
     draw_text(mx + 28, my + 24, "TRANSMISSION TIMEOUT", COL_HIT, f_lg)
     draw_text(mx + 28, my + 64, "5 attempts exceeded without ACK reply.", COL_TEXT_BRIGHT, f_md)
     draw_text(mx + 28, my + 94, "Peer node unreachable or out of range.", COL_TEXT_DIM, f_sm)
@@ -2955,22 +3177,21 @@ local function draw_retry_modal()
     local bw = 230
     local bh = 54
     local by = my + 160
-    box(mx + 28, by, bw, bh, COL_BAR_BG, COL_STATUS_AMBER)
-    draw_text_centered(mx + 28, by + math.floor((bh - th(f_md)) / 2), bw, "[1] RESEND NOW", COL_STATUS_AMBER, f_md)
+    draw_metallic_button(mx + 28, by, bw, bh, "RESEND NOW", COL_STATUS_AMBER, COL_STATUS_AMBER)
+    draw_metallic_button(mx + mw - bw - 28, by, bw, bh, "FORFEIT", COL_HIT, COL_HIT)
 
-    box(mx + mw - bw - 28, by, bw, bh, COL_BAR_BG, COL_HIT)
-    draw_text_centered(mx + mw - bw - 28, by + math.floor((bh - th(f_md)) / 2), bw, "[2] FORFEIT", COL_HIT, f_md)
+    draw_menu_button()
   else
-    box(20, 32, 280, 140, COL_PANEL_BG, COL_HIT)
+    local mx, my, mw, mh = 20, 32, 280, 140
+    draw_panel_frame(mx, my, mw, mh, "TIMEOUT", COL_HIT)
     draw_text(30, 42, "TRANSMISSION TIMEOUT", COL_HIT, 14)
-    draw_text(30, 66, "5 attempts exceeded without ACK reply.", COL_TEXT_BRIGHT, 12)
-    draw_text(30, 84, "Peer node unreachable or out of range.", COL_TEXT_DIM, 12)
+    draw_text(30, 66, "5 attempts exceeded without ACK.", COL_TEXT_BRIGHT, 12)
+    draw_text(30, 84, "Peer unreachable or out of range.", COL_TEXT_DIM, 12)
 
-    box(30, 110, 115, 30, COL_BAR_BG, COL_STATUS_AMBER)
-    draw_text(40, 118, "[1] RESEND NOW", COL_STATUS_AMBER, 12)
+    draw_metallic_button(30, 110, 115, 30, "RESEND", COL_STATUS_AMBER, COL_STATUS_AMBER)
+    draw_metallic_button(155, 110, 115, 30, "FORFEIT", COL_HIT, COL_HIT)
 
-    box(165, 110, 115, 30, COL_BAR_BG, COL_HIT)
-    draw_text(175, 118, "[2] FORFEIT", COL_HIT, 12)
+    draw_menu_button()
   end
 end
 
@@ -2982,23 +3203,24 @@ draw_screen = function()
   if port then
     cv:fill(COL_BG)
     box(0, 0, W, top_h, COL_BAR_BG, nil)
-    draw_line(0, top_h, W, top_h, COL_BORDER_NORM, 1)
+    draw_line(0, top_h, W, top_h, COL_STEEL_BORDER, 1)
     draw_text(16, s2 and 5 or 3, "[ORIENTATION]", COL_STATUS_AMBER, f_sm)
 
     local cx = math.floor(W / 2)
     local px, py = 16, top_h + 16
     local bw, bh = W - px * 2, H - top_h - bot_h - 32
-    box(px, py, bw, bh, COL_PANEL_BG, COL_BORDER_NORM)
+    draw_panel_frame(px, py, bw, bh, "ORIENTATION", COL_STATUS_AMBER)
     local my = py + math.floor(bh * 0.25)
 
     draw_text_centered(px, my, bw, "[ ROTATE DEVICE ]", COL_RETICLE, f_xl)
-    draw_text_centered(px, my + th(f_xl) + 14, bw, "GRID STRIKE: NAVAL LORAMESH", COL_STATUS_GREEN, f_lg)
-    draw_text_centered(px, my + th(f_xl) + th(f_lg) + 24, bw, "Battleship requires horizontal screen play.", COL_TEXT_DIM, f_sm)
+    draw_text_centered(px, my + th(f_xl) + 14, bw, "GRID STRIKE: NAVAL COMBAT", COL_STATUS_GREEN, f_lg)
+    draw_text_centered(px, my + th(f_xl) + th(f_lg) + 24, bw, "Grid Strike requires horizontal screen play.", COL_TEXT_DIM, f_sm)
     draw_text_centered(px, my + th(f_xl) + th(f_lg) + th(f_sm) + 34, bw, "Please rotate your device to Landscape.", COL_RETICLE, f_sm)
     draw_text_centered(px, my + th(f_xl) + th(f_lg) + th(f_sm) * 2 + 46, bw, "(Settings > Display > Orientation > Landscape)", COL_TEXT_DIM, f_xs)
 
     local by = H - bot_h
-    box(0, by, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
+    box(0, by, W, bot_h, COL_BAR_BG, nil)
+    draw_line(0, by, W, by, COL_STEEL_BORDER, 1)
     local bw_b, bh_b = W - 32, bot_h - 12
     local bx, bby = 16, by + 6
     box(bx, bby, bw_b, bh_b, 0x11161C, nil)
@@ -3063,6 +3285,12 @@ function app.on_key(key)
       sys.toast(sound_on and "Sound ON" or "Sound MUTED")
     end
     draw_screen()
+    return
+  end
+
+  -- Global Return to Menu: "q" or "escape" returns to main menu from any active screen
+  if (k == "q" or k == "escape") and game_state ~= STATE_LOBBY then
+    return_to_lobby()
     return
   end
 
@@ -3152,11 +3380,32 @@ function app.on_key(key)
   -- 3. Lobby Menu Inputs
   if game_state == STATE_LOBBY then
     if k == "1" or k == "h" then
+      lobby_focus = 1
       NetEngine.host_lobby()
     elseif k == "2" or k == "j" then
+      lobby_focus = 2
       NetEngine.join_lobby()
-    elseif k == "3" or k == "a" then
+    elseif k == "3" or k == "a" or k == "v" then
+      lobby_focus = 3
       NetEngine.start_vs_ai()
+    elseif k == "left" or k == "up" then
+      lobby_focus = lobby_focus - 1
+      if lobby_focus < 1 then lobby_focus = 3 end
+      sfx_play("BEEP")
+      draw_screen()
+    elseif k == "right" or k == "down" then
+      lobby_focus = lobby_focus + 1
+      if lobby_focus > 3 then lobby_focus = 1 end
+      sfx_play("BEEP")
+      draw_screen()
+    elseif k == "enter" or k == "space" then
+      if lobby_focus == 1 then
+        NetEngine.host_lobby()
+      elseif lobby_focus == 2 then
+        NetEngine.join_lobby()
+      else
+        NetEngine.start_vs_ai()
+      end
     end
     return
   end
@@ -3246,6 +3495,7 @@ function app.on_key(key)
       else
         -- All ships placed: lock in fleet and initiate battle
         NetEngine.lock_in_fleet()
+        return
       end
     end
     draw_screen()
@@ -3297,6 +3547,15 @@ function app.on_input(ev)
   if ev.type == "down" then
     local tx, ty = I(ev.x), I(ev.y)
     local is_tb_center = (tx == math.floor(W / 2) and ty == math.floor(H / 2))
+
+    -- Check bottom-right Menu button tap on ANY screen except main menu
+    if game_state ~= STATE_LOBBY then
+      local mb = get_menu_button()
+      if tx >= mb.x and tx <= mb.x + mb.w and ty >= mb.y and ty <= mb.y + mb.h then
+        return_to_lobby()
+        return
+      end
+    end
 
     -- Audio toggle tap (Top right or side panel sound button)
     local is_vol_tap = false
@@ -3376,29 +3635,21 @@ function app.on_input(ev)
       return
     end
 
-    -- Lobby Menu Taps
+    -- Lobby Menu Taps (3 Metallic Action Buttons)
     if game_state == STATE_LOBBY then
-      if s2 then
-        local lw = math.min(860, W - 48)
-        local lx = math.floor((W - lw) / 2)
-        if tx >= lx and tx <= lx + lw then
-          if ty >= 170 and ty <= 222 then
+      local btns = get_lobby_buttons()
+      for i = 1, #btns do
+        local b = btns[i]
+        if tx >= b.x and tx <= b.x + b.w and ty >= b.y and ty <= b.y + b.h then
+          lobby_focus = i
+          if b.id == "host" then
             NetEngine.host_lobby()
-          elseif ty >= 232 and ty <= 284 then
+          elseif b.id == "join" then
             NetEngine.join_lobby()
-          elseif ty >= 294 and ty <= 346 then
+          elseif b.id == "ai" then
             NetEngine.start_vs_ai()
           end
-        end
-      else
-        if tx >= 14 and tx <= 306 then
-          if ty >= 104 and ty <= 126 then
-            NetEngine.host_lobby()
-          elseif ty >= 130 and ty <= 152 then
-            NetEngine.join_lobby()
-          elseif ty >= 156 and ty <= 178 then
-            NetEngine.start_vs_ai()
-          end
+          return
         end
       end
       return
@@ -3526,7 +3777,11 @@ function app.on_message(m)
     local ch = m.channel:lower()
     local target = GAME_CHANNEL:lower()
     local raw_target = target:gsub("^#", "")
-    if ch ~= target and ch ~= raw_target and ch ~= ("#" .. raw_target) and ch ~= "public" then
+    local alt_target = ALT_GAME_CHANNEL:lower()
+    local raw_alt = alt_target:gsub("^#", "")
+    if ch ~= target and ch ~= raw_target and ch ~= ("#" .. raw_target)
+       and ch ~= alt_target and ch ~= raw_alt and ch ~= ("#" .. raw_alt)
+       and ch ~= "public" then
       return
     end
   elseif m.kind == "dm" and text:sub(1, 3) == "BS|" then

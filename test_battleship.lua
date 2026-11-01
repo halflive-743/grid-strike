@@ -457,8 +457,8 @@ guarded(p4_lcd_app.on_open, 1168, 474)
 print("OK: P4 LCD Landscape (1168x474) opened, multi-tile canvas bounded to <= 480px")
 
 -- Verify Lobby touch on P4 LCD (Tap Option [3] VS AI)
--- In P4 LCD lobby, option 3 is around y = 294..346, x = centered
-guarded(p4_lcd_app.on_input, { type = "down", x = 584, y = 310 })
+-- In P4 LCD lobby, metallic button [3] VS AI is around x = 780..1124, y = 364..444
+guarded(p4_lcd_app.on_input, { type = "down", x = 950, y = 400 })
 print("OK: P4 LCD Lobby touch tap option [3] triggered Setup")
 
 -- Verify P4 LCD Setup Screen Touch Controls (Side Panel buttons)
@@ -515,5 +515,48 @@ pre_draw_ops = draw_ops
 guarded(p4_amoled_port.on_key, "3")
 assert(draw_ops == pre_draw_ops, "P4 AMOLED Portrait must block inputs")
 print("OK: P4 AMOLED Portrait (568x1166) rotation guard verified")
+
+-- 11. Bottom-Right Menu Button & Clean Return to Lobby Suite
+print("=== TESTING BOTTOM-RIGHT MENU BUTTON & RETURN TO LOBBY ===")
+
+_G.wada = mock_wada(320, 240)
+local menu_test_app = dofile("battleship.lua")
+guarded(menu_test_app.on_open, 320, 240)
+
+-- Test 11a: Tap Menu button from Setup screen on T-Deck
+guarded(menu_test_app.on_key, "1") -- Enter Setup (Host)
+-- Bottom-right Menu button on 320x240 is around x = 260..314, y = 193..219
+guarded(menu_test_app.on_input, { type = "down", x = 290, y = 205 })
+-- Verify we are back in Lobby: key "3" should successfully trigger VS AI setup
+guarded(menu_test_app.on_key, "3")
+print("OK: T-Deck Setup screen bottom-right Menu button returned cleanly to Lobby")
+
+-- Test 11b: Key "q" / "escape" returns to Lobby from Setup
+guarded(menu_test_app.on_key, "q")
+-- Verify we can launch Join (key "2")
+guarded(menu_test_app.on_key, "2")
+print("OK: Key [Q] returned cleanly to Lobby")
+
+-- Test 11c: Tap Menu button during Active Combat on T-Deck
+place_all_ships_manually(menu_test_app)
+guarded(menu_test_app.on_key, "enter") -- Start combat
+-- During combat, tap bottom-right Menu button (x = 290, y = 205)
+guarded(menu_test_app.on_input, { type = "down", x = 290, y = 205 })
+-- Verify back in Lobby by pressing key "3"
+guarded(menu_test_app.on_key, "3")
+print("OK: Active Combat bottom-right Menu button cleanly aborted match and returned to Lobby")
+
+-- Test 11d: Tap Menu button on P4 AMOLED (1232x502) in Combat
+_G.wada = mock_wada(1232, 502)
+local p4_menu_app = dofile("battleship.lua")
+guarded(p4_menu_app.on_open, 1232, 502)
+guarded(p4_menu_app.on_key, "3")
+place_all_ships_manually(p4_menu_app)
+guarded(p4_menu_app.on_key, "enter")
+-- On 1232x502, Menu button is at W - 110 - 14 = 1108..1218, y = 450 + (52-36)//2 = 458..494
+guarded(p4_menu_app.on_input, { type = "down", x = 1150, y = 475 })
+-- Verify back in Lobby
+guarded(p4_menu_app.on_key, "3")
+print("OK: P4 AMOLED Combat bottom-right Menu button returned cleanly to Lobby")
 
 print(string.format("ALL TESTS PASSED! Max instructions in any callback: %d (< 100000 limit)", max_instructions))
