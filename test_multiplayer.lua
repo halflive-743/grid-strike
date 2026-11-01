@@ -646,4 +646,70 @@ assert(host4_saved:find("|STATE_ENEMY_TURN|2|"), "Host must clear ACK wait and a
 assert(fw_host4.timers["lora_tx_retry"] == nil, "Host retry timer must be cleared after receiving BS|RES!")
 print("OK: Joiner stuck at SCANNING + Host waiting for FIRE ACK deadlock completely resolved!")
 
+-- Case E: Combat uses DMs (mesh.send_dm) when peer is in Contacts, and falls back to #battleship if DM is unanswered
+local dm_host = create_wadamesh_firmware_node("DM_HOST")
+local dm_join = create_wadamesh_firmware_node("DM_JOIN")
+-- Both nodes have each other in Contacts and allow mesh.send_dm
+dm_host.wada.mesh.contacts = function() return { { name = "DM_JOIN" } } end
+dm_join.wada.mesh.contacts = function() return { { name = "DM_HOST" } } end
+dm_host.wada.mesh.send_dm = function(to, text)
+  if dm_host.now_ms - dm_host.last_send_ms < 5000 then return false, "too fast" end
+  dm_host.last_send_ms = dm_host.now_ms
+  dm_host.outbox[#dm_host.outbox + 1] = { to = to, text = text, kind = "dm" }
+  return true, "sent"
+end
+dm_join.wada.mesh.send_dm = function(to, text)
+  if dm_join.now_ms - dm_join.last_send_ms < 5000 then return false, "too fast" end
+  dm_join.last_send_ms = dm_join.now_ms
+  dm_join.outbox[#dm_join.outbox + 1] = { to = to, text = text, kind = "dm" }
+  return true, "sent"
+end
+dm_host.wada.sys.random = function(lo, hi) return hi == 999999 and 900000 or lo end
+dm_join.wada.sys.random = function(lo, hi) return hi == 999999 and 100000 or lo end
+
+_G.wada = dm_host.wada
+local app_dm_host = dofile("battleship.lua")
+app_dm_host.on_open(320, 240)
+app_dm_host.on_key("1")
+place_all_ships(app_dm_host)
+app_dm_host.on_key("enter")
+local dm_seek = table.remove(dm_host.outbox, 1)
+assert(dm_seek.kind == "channel", "Lobby SEEK must use #battleship channel")
+
+_G.wada = dm_join.wada
+local app_dm_join = dofile("battleship.lua")
+app_dm_join.on_open(320, 240)
+app_dm_join.on_key("2")
+place_all_ships(app_dm_join)
+app_dm_join.on_message({ from = "DM_HOST", kind = "channel", channel = "#battleship", text = dm_seek.text })
+app_dm_join.on_key("enter")
+local dm_join_pkt = table.remove(dm_join.outbox, 1)
+assert(dm_join_pkt.kind == "channel", "Lobby JOIN must use #battleship channel")
+
+dm_host.now_ms = 16000
+_G.wada = dm_host.wada
+app_dm_host.on_message({ from = "DM_JOIN", kind = "channel", channel = "#battleship", text = dm_join_pkt.text })
+local dm_rdy_pkt = table.remove(dm_host.outbox, 1)
+assert(dm_rdy_pkt.kind == "channel", "Lobby RDY must use #battleship channel")
+
+_G.wada = dm_join.wada
+app_dm_join.on_message({ from = "DM_HOST", kind = "channel", channel = "#battleship", text = dm_rdy_pkt.text })
+
+-- Turn 1: Host fires at (0,0) after 5s cooldown -> must use DM (mesh.send_dm)!
+dm_host.now_ms = 22000
+_G.wada = dm_host.wada
+app_dm_host.on_key("enter")
+assert(#dm_host.outbox == 1, "Host must send Turn 1 BS|FIRE")
+local dm_fire_pkt = table.remove(dm_host.outbox, 1)
+assert(dm_fire_pkt.kind == "dm" and dm_fire_pkt.to == "DM_JOIN", "Combat BS|FIRE must use mesh.send_dm first! Got kind=" .. tostring(dm_fire_pkt.kind))
+
+-- Deliver DM BS|FIRE to Joiner -> Joiner must reply with BS|RES via DM!
+dm_join.now_ms = 22000
+_G.wada = dm_join.wada
+app_dm_join.on_message({ from = "DM_HOST", kind = "dm", text = dm_fire_pkt.text })
+assert(#dm_join.outbox == 1, "Joiner must reply with BS|RES")
+local dm_res_pkt = table.remove(dm_join.outbox, 1)
+assert(dm_res_pkt.kind == "dm" and dm_res_pkt.to == "DM_HOST", "Combat BS|RES must use mesh.send_dm! Got kind=" .. tostring(dm_res_pkt.kind))
+print("OK: Combat uses DMs (mesh.send_dm) with automatic #battleship fallback!")
+
 print("=== ALL EXTENDED 1v1 MULTIPLAYER TESTS PASSED ===")

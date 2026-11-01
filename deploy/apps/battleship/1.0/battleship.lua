@@ -1,5 +1,5 @@
 -- ==============================================================================
--- GRID STRIKE: 1v1 Battleship for WADAMESH (LilyGo T-Deck / ESP32-S3 LoRa Mesh)
+-- GRID STRIKE: 1v1 Battleship for WADAMESH (LilyGo T-Deck & T-Display P4)
 -- Production-Ready Single-File Script: battleship.lua
 -- ==============================================================================
 
@@ -56,47 +56,273 @@ local function I(v)
   return math.floor(tonumber(v) or 0)
 end
 
+-- ---- Font Measurement & Geometry Helpers -------------------------------------
+local function tw(s, z)
+  s, z = tostring(s or ""), I(z or 12)
+  if ui and ui.text_w then return I(ui.text_w(s, z)) end
+  return I(#s * (z + 4) * 0.48)
+end
+
+local function th(z)
+  z = I(z or 12)
+  if ui and ui.text_h then return I(ui.text_h(z)) end
+  return z + 4
+end
+
 -- ---- Screen & Layout Dimensions ---------------------------------------------
 local W, H = 320, 240
 local cv = nil
+local dname = "T-Deck"
+local port  = false
+local s2    = false
+local top_h = 18
+local bot_y = 182
+local bot_h = 48
 local cell_sz = 14
 local target_panel = { x = 10,  y = 32, w = 144, h = 144 }
 local home_panel   = { x = 166, y = 32, w = 144, h = 144 }
-local bot_y = 182
-local bot_h = 48
+local side_panel   = { x = 0,   y = 0,  w = 0,   h = 0 }
+local f_xs, f_sm, f_md, f_lg, f_xl = 10, 11, 12, 14, 16
 
 local function compute_layout(w, h)
-  W = I(w or 320)
-  H = I(h or 240)
+  local brd = (sys.board and sys.board()) or {}
+  W = I((w and w > 0) and w or ((brd.w and brd.w > 0) and brd.w or 320))
+  H = I((h and h > 0) and h or ((brd.h and brd.h > 0) and brd.h or 240))
 
-  if W < 300 then
-    -- Narrow portrait (e.g. ThinkNode M9 240x320)
-    cell_sz = 10
-    local pw = 10 * cell_sz + 4
-    target_panel.w = pw; target_panel.h = pw
-    home_panel.w = pw;   home_panel.h = pw
-    target_panel.x = 8;  home_panel.x = 124
-    target_panel.y = 32; home_panel.y = 32
-    bot_y = 150;         bot_h = math.max(40, H - bot_y)
-  elseif H < 230 then
-    -- Compact landscape (LilyGo T-Deck 320x208..216 below title bar)
-    cell_sz = 12
-    local pw = 10 * cell_sz + 4
-    target_panel.w = pw; target_panel.h = pw
-    home_panel.w = pw;   home_panel.h = pw
-    target_panel.x = 10; home_panel.x = 166
-    target_panel.y = 32; home_panel.y = 32
-    bot_y = 160;         bot_h = math.max(42, H - bot_y)
+  local s, l = math.min(W, H), math.max(W, H)
+  port = (H > W)
+
+  if l >= 1185 or (W == 568 and H >= 900) or (W >= 1185 and H >= 460) then
+    dname, s2 = "T-Display P4 AMOLED", true
+  elseif (l >= 1050 and l < 1185) or (W == 540 and H >= 900) or (W >= 500 and W < 560 and H >= 900) then
+    dname, s2 = "T-Display P4 LCD", true
+  elseif l >= 700 or s >= 460 then
+    dname, s2 = "Large HD", true
   else
-    -- Standard landscape (320x240 LilyGo T-Deck / 480x240)
-    cell_sz = 14
-    local pw = 10 * cell_sz + 4
-    target_panel.w = pw; target_panel.h = pw
-    home_panel.w = pw;   home_panel.h = pw
-    target_panel.x = 10; home_panel.x = 166
-    target_panel.y = 32; home_panel.y = 32
-    bot_y = 182;         bot_h = math.max(48, H - bot_y)
+    dname, s2 = (W >= 440 and H < 320) and "Wide Compact" or "T-Deck", false
   end
+
+  if s2 then
+    f_xs, f_sm, f_md, f_lg, f_xl = 14, 14, 16, 20, 24
+    top_h = 28
+    bot_h = 52
+    bot_y = H - bot_h
+
+    -- Dynamic cell size and panel placement on high-res wide displays
+    local avail_h = bot_y - top_h - 26
+    local max_cs = math.floor(avail_h / 10)
+    cell_sz = math.max(20, math.min(36, max_cs))
+    local pw = 10 * cell_sz + 4
+    local py = top_h + 18
+
+    target_panel.x = 24
+    target_panel.y = py
+    target_panel.w = pw
+    target_panel.h = pw
+
+    home_panel.x = target_panel.x + pw + 20
+    home_panel.y = py
+    home_panel.w = pw
+    home_panel.h = pw
+
+    -- Side action / telemetry panel on the right (P4 Landscape)
+    side_panel.x = home_panel.x + pw + 20
+    side_panel.y = py
+    side_panel.w = math.max(120, W - side_panel.x - 24)
+    side_panel.h = pw
+  else
+    f_xs, f_sm, f_md, f_lg, f_xl = 10, 11, 12, 14, 16
+    top_h = 18
+    side_panel.w = 0
+    if W < 300 then
+      -- Narrow portrait (e.g. ThinkNode M9 240x320)
+      cell_sz = 10
+      local pw = 10 * cell_sz + 4
+      target_panel.w = pw; target_panel.h = pw
+      home_panel.w = pw;   home_panel.h = pw
+      target_panel.x = 8;  home_panel.x = 124
+      target_panel.y = 32; home_panel.y = 32
+      bot_y = 150;         bot_h = math.max(40, H - bot_y)
+    elseif H < 230 then
+      -- Compact landscape (LilyGo T-Deck 320x208..216 below title bar)
+      cell_sz = 12
+      local pw = 10 * cell_sz + 4
+      target_panel.w = pw; target_panel.h = pw
+      home_panel.w = pw;   home_panel.h = pw
+      target_panel.x = 10; home_panel.x = 166
+      target_panel.y = 32; home_panel.y = 32
+      bot_y = 160;         bot_h = math.max(42, H - bot_y)
+    else
+      -- Standard landscape (320x240 LilyGo T-Deck / 480x240)
+      cell_sz = 14
+      local pw = 10 * cell_sz + 4
+      target_panel.w = pw; target_panel.h = pw
+      home_panel.w = pw;   home_panel.h = pw
+      target_panel.x = 10; home_panel.x = 166
+      target_panel.y = 32; home_panel.y = 32
+      bot_y = 182;         bot_h = math.max(48, H - bot_y)
+    end
+  end
+end
+
+-- ---- Tiled Canvas Wrapper for > 480px Screens (WADAMESH 480px Tile Bound) ----
+local function make_cv(w, h)
+  w, h = I(w), I(h)
+  if not (ui and ui.canvas) then return nil end
+  if w <= 480 and h <= 480 then
+    local s = ui.canvas(w, h)
+    if s and s.pos then s:pos(0, 0) end
+    return s
+  end
+
+  local nx, ny = math.ceil(w / 480), math.ceil(h / 480)
+  local bw, bh = I(math.ceil(w / nx)), I(math.ceil(h / ny))
+  local grid_tiles = {}
+  local all_tiles  = {}
+
+  for ry = 0, ny - 1 do
+    grid_tiles[ry] = {}
+    local ty, th_t = ry * bh, math.min(bh, h - ry * bh)
+    for cx = 0, nx - 1 do
+      local tx, tw_t = cx * bw, math.min(bw, w - cx * bw)
+      if tw_t > 0 and th_t > 0 then
+        local tc = ui.canvas(tw_t, th_t)
+        if tc and tc.pos then tc:pos(tx, ty) end
+        local t_obj = { c = tc, x = tx, y = ty, x2 = tx + tw_t, y2 = ty + th_t }
+        grid_tiles[ry][cx] = t_obj
+        all_tiles[#all_tiles + 1] = t_obj
+      end
+    end
+  end
+
+  local v = { tiles = all_tiles }
+  function v:fill(c)
+    c = I(c)
+    for i = 1, #all_tiles do all_tiles[i].c:fill(c) end
+  end
+
+  function v:rect(x, y, rw, rh, c, f, r)
+    local min_cx = (x <= 0) and 0 or (x // bw)
+    local x2 = x + rw - 1
+    local max_cx = (x2 <= 0) and 0 or (x2 // bw)
+    if max_cx >= nx then max_cx = nx - 1 end
+
+    local min_ry = (y <= 0) and 0 or (y // bh)
+    local y2 = y + rh - 1
+    local max_ry = (y2 <= 0) and 0 or (y2 // bh)
+    if max_ry >= ny then max_ry = ny - 1 end
+
+    for ry = min_ry, max_ry do
+      local row = grid_tiles[ry]
+      if row then
+        for cx = min_cx, max_cx do
+          local t = row[cx]
+          if t then
+            t.c:rect(x - t.x, y - t.y, rw, rh, c, f, r)
+          end
+        end
+      end
+    end
+  end
+
+  function v:line(x1, y1, x2, y2, c, lw)
+    lw = lw or 1
+    local min_x, max_x = (x1 < x2 and x1 or x2) - lw, (x1 > x2 and x1 or x2) + lw
+    local min_y, max_y = (y1 < y2 and y1 or y2) - lw, (y1 > y2 and y1 or y2) + lw
+    local min_cx = (min_x <= 0) and 0 or (min_x // bw)
+    local max_cx = (max_x <= 0) and 0 or (max_x // bw)
+    if max_cx >= nx then max_cx = nx - 1 end
+
+    local min_ry = (min_y <= 0) and 0 or (min_y // bh)
+    local max_ry = (max_y <= 0) and 0 or (max_y // bh)
+    if max_ry >= ny then max_ry = ny - 1 end
+
+    for ry = min_ry, max_ry do
+      local row = grid_tiles[ry]
+      if row then
+        for cx = min_cx, max_cx do
+          local t = row[cx]
+          if t then
+            t.c:line(x1 - t.x, y1 - t.y, x2 - t.x, y2 - t.y, c, lw)
+          end
+        end
+      end
+    end
+  end
+
+  function v:circle(cx, cy, r, c, f)
+    local min_x, max_x = cx - r, cx + r
+    local min_y, max_y = cy - r, cy + r
+    local min_cx = (min_x <= 0) and 0 or (min_x // bw)
+    local max_cx = (max_x <= 0) and 0 or (max_x // bw)
+    if max_cx >= nx then max_cx = nx - 1 end
+
+    local min_ry = (min_y <= 0) and 0 or (min_y // bh)
+    local max_ry = (max_y <= 0) and 0 or (max_y // bh)
+    if max_ry >= ny then max_ry = ny - 1 end
+
+    for ry = min_ry, max_ry do
+      local row = grid_tiles[ry]
+      if row then
+        for gx = min_cx, max_cx do
+          local t = row[gx]
+          if t and t.c.circle then
+            t.c:circle(cx - t.x, cy - t.y, r, c, f)
+          end
+        end
+      end
+    end
+  end
+
+  function v:pos(ox, oy)
+    ox, oy = I(ox), I(oy)
+    for i = 1, #all_tiles do
+      if all_tiles[i].c and all_tiles[i].c.pos then
+        all_tiles[i].c:pos(all_tiles[i].x + ox, all_tiles[i].y + oy)
+      end
+    end
+  end
+
+  function v:text(x, y, s, c, z)
+    x, y, c, z = I(x), I(y), I(c), I(z or f_sm)
+    local s_str = tostring(s or "")
+    local sw, sh = tw(s_str, z), th(z)
+    local min_cx = (x <= 0) and 0 or (x // bw)
+    local max_cx = (x + sw <= 0) and 0 or ((x + sw) // bw)
+    if max_cx >= nx then max_cx = nx - 1 end
+
+    local min_ry = (y <= 0) and 0 or (y // bh)
+    local max_ry = (y + sh <= 0) and 0 or ((y + sh) // bh)
+    if max_ry >= ny then max_ry = ny - 1 end
+
+    if min_cx < max_cx and sw > bw - 10 then
+      local m, sp = math.floor(#s_str / 2), nil
+      for d = 0, m - 1 do
+        if s_str:sub(m + d, m + d) == " " then sp = m + d; break end
+        if m - d >= 1 and s_str:sub(m - d, m - d) == " " then sp = m - d; break end
+      end
+      if sp and sp > 1 and sp < #s_str then
+        local ls = s_str:sub(1, sp - 1)
+        v:text(x, y, ls, c, z)
+        v:text(x + tw(ls .. " ", z), y, s_str:sub(sp + 1), c, z)
+        return
+      end
+    end
+
+    for ry = min_ry, max_ry do
+      local row = grid_tiles[ry]
+      if row then
+        for gx = min_cx, max_cx do
+          local t = row[gx]
+          if t then
+            t.c:text(x - t.x, y - t.y, s_str, c, z)
+          end
+        end
+      end
+    end
+  end
+
+  return v
 end
 
 -- ---- Audio & Feedback State -------------------------------------------------
@@ -753,6 +979,7 @@ end
 
 -- ---- Mesh Transmission Wrapper & WADAMESH 5s Cooldown Pacer -----------------
 local peer_dm_verified = false
+local peer_dm_allowed  = true
 local tx_dup_nonce     = 0
 local paced_queue      = {} -- FIFO queue of { to = "...", text = "..." }
 
@@ -849,16 +1076,21 @@ local function mesh_send_raw(to, text)
     return send_on_game_channel(str_text)
   end
 
-  -- 1. If peer DM is verified end-to-end and this is not a lobby handshake packet,
-  --    prefer DM (6-burst / 10s refill budget) and fall back to #battleship channel.
-  if peer_dm_verified and not is_handshake then
+  -- 1. During active combat (non-handshake packets), try Direct Message (mesh.send_dm) first!
+  --    DMs use WADAMESH's 6-burst / 10s refill budget and avoid flooding #battleship.
+  --    If peer is not in Contacts or DM permission is unavailable, fall back to #battleship.
+  if peer_dm_allowed and not is_handshake and mesh.send_dm then
     local dm_ok, dm_err = try_send_dm(to_str, str_text)
     if dm_ok then return true end
     if dm_err == "too fast" then return false, "too fast" end
+    if dm_err == "permission denied" then
+      peer_dm_allowed = false
+    elseif dm_err == "permission requested" then
+      if sys and sys.toast then pcall(sys.toast, "Allow DM popup for direct combat", 2500) end
+    end
   end
 
-  -- 2. Send on #battleship channel (works without Contacts or DM Read/Send perms).
-  --    If channel budget is rate-limited, overflow to DM if available.
+  -- 2. Send on #battleship channel (used for Lobby Handshake and automatic DM fallback).
   if mesh.channels then
     local ch_ok, ch_err = send_on_game_channel(str_text)
     if ch_ok then return true end
@@ -1189,6 +1421,7 @@ function NetEngine.start_retry_timer()
         tx_pending.next_wait = 6000 + (tx_pending.retries * 2000)
         -- If our previous attempt was a DM that went unanswered, fall back to #battleship
         peer_dm_verified = false
+        peer_dm_allowed = false
         combat_log = string.format("> TX RETRY %d/5 [Seq %d]...", tx_pending.retries, tx_pending.seq)
         mesh_send(opponent_id, tx_pending.payload)
         if draw_screen then draw_screen() end
@@ -1343,6 +1576,7 @@ function NetEngine.host_lobby()
   is_ai_match = false
   opponent_id = ""
   peer_dm_verified = false
+  peer_dm_allowed = true
   enemy_callsign = "WAITING"
   local_seq = 0
   setup_ship_idx = 1
@@ -1372,6 +1606,7 @@ function NetEngine.join_lobby()
   match_id = ""
   opponent_id = ""
   peer_dm_verified = false
+  peer_dm_allowed = true
   enemy_callsign = "SCANNING"
   is_host = false
   is_ai_match = false
@@ -1879,6 +2114,10 @@ function NetEngine.process_packet(sender, text)
 
     -- Dropped ACK Fix: Defender receives duplicate FIRE for seq - 1
     if seq == local_seq - 1 and last_sent_res then
+      -- If our DM reply wasn't heard by the attacker, fall back to #battleship channel
+      if not peer_dm_verified then
+        peer_dm_allowed = false
+      end
       mesh_send(opponent_id, last_sent_res.payload)
       combat_log = string.format("> RE-TX LAST RES [Seq %d]...", seq)
       if draw_screen then draw_screen() end
@@ -2106,20 +2345,20 @@ local function draw_text(x, y, str, col, sz)
   if not cv or not str or str == "" then return end
   local s = tostring(str)
   local avail_w = W - I(x)
-  local max_chars = math.floor(avail_w / 7.2)
+  local char_w = (sz and sz > 14) and (sz * 0.58) or 7.2
+  local max_chars = math.floor(avail_w / char_w)
   if max_chars > 3 and #s > max_chars then
     s = s:sub(1, max_chars - 1) .. "."
   end
-  cv:text(I(x), I(y), s, col or COL_TEXT_BRIGHT, sz or 12)
+  cv:text(I(x), I(y), s, col or COL_TEXT_BRIGHT, sz or f_sm)
 end
 
 local function draw_text_centered(bx, by, bw, str, col, sz)
   if not cv or not str or str == "" then return end
   local s = tostring(str)
-  local char_w = (sz and sz > 12) and 8.5 or 7.5
-  local tw = math.floor(#s * char_w)
-  local tx = bx + math.max(2, math.floor((bw - tw) / 2))
-  draw_text(tx, by, s, col, sz)
+  local t_w = tw(s, sz or f_sm)
+  local tx = bx + math.max(2, math.floor((bw - t_w) / 2))
+  draw_text(tx, by, s, col, sz or f_sm)
 end
 
 local function draw_line(x1, y1, x2, y2, col, width)
@@ -2129,10 +2368,10 @@ end
 
 -- ---- Screen Renderers -------------------------------------------------------
 
--- Draw Top Telemetry Bar (320x18)
+-- Draw Top Telemetry Bar
 local function draw_top_bar()
-  box(0, 0, W, 18, COL_BAR_BG, nil)
-  draw_line(0, 18, W, 18, COL_BORDER_NORM, 1)
+  box(0, 0, W, top_h, COL_BAR_BG, nil)
+  draw_line(0, top_h, W, top_h, COL_BORDER_NORM, 1)
 
   -- State indicator (Left)
   local state_text = "[IDLE]"
@@ -2166,7 +2405,8 @@ local function draw_top_bar()
     state_text = "[GRID STRIKE]"
     state_col  = COL_TEXT_BRIGHT
   end
-  draw_text(6, 3, state_text, state_col, 12)
+  local ty = s2 and 5 or 3
+  draw_text(s2 and 16 or 6, ty, state_text, state_col, f_sm)
 
   -- Lockstep telemetry & retry counter (Center-Right)
   local telem_text = ""
@@ -2181,18 +2421,24 @@ local function draw_top_bar()
   elseif game_state == STATE_SETUP and match_id ~= "" then
     telem_text = is_ai_match and "VS CPU" or string.format("ID:%s", match_id)
   end
-  draw_text(118, 3, telem_text, COL_TEXT_DIM, 12)
+  local telem_x = s2 and math.floor(W * 0.35) or 118
+  draw_text(telem_x, ty, telem_text, COL_TEXT_DIM, f_sm)
 
   -- Audio Mute Indicator
   local snd_str = sound_on and "[VOL]" or "[MUTE]"
-  draw_text(236, 3, snd_str, sound_on and COL_STATUS_GREEN or COL_HIT, 12)
+  local snd_x = s2 and (W - 190) or 236
+  draw_text(snd_x, ty, snd_str, sound_on and COL_STATUS_GREEN or COL_HIT, f_sm)
 
-  -- Fleet Health Pips (5 Green dots for Home, 5 dots for Enemy)
-  local pips_x = 282
+  -- Fleet Health Pips (5 Green/Red pips for Home fleet)
+  local pip_w = s2 and 10 or 5
+  local pip_h = s2 and 12 or 6
+  local pip_gap = s2 and 13 or 7
+  local pips_x = s2 and (W - 85) or 282
+  local pips_y = s2 and 8 or 6
   for i = 1, 5 do
     local is_damaged = (my_ship_hits[i] or 0) >= SHIP_SPECS[i].len
     local pip_col = is_damaged and COL_HIT or COL_OWN_FLEET
-    cv:rect(pips_x + (i - 1) * 7, 6, 5, 6, pip_col, true)
+    cv:rect(pips_x + (i - 1) * pip_gap, pips_y, pip_w, pip_h, pip_col, true)
   end
 end
 
@@ -2203,27 +2449,26 @@ local function draw_target_radar()
   local bcol = (shake_panel == "target" and shake_color) or COL_BORDER_NORM
   local span = cell_sz * 10
   local pw = target_panel.w
+  local title_y = s2 and (target_panel.y - th(f_sm) - 2) or 19
 
-  draw_text(target_panel.x + 2, 19, "TARGET RADAR", COL_TEXT_DIM, 12)
+  draw_text(target_panel.x + 2, title_y, "TARGET RADAR", COL_TEXT_DIM, f_sm)
   box(px, py, pw, pw, COL_PANEL_BG, bcol)
 
   local gx = px + 2
   local gy = py + 2
 
-  -- Background fill and continuous radar grid lines
-  cv:rect(gx, gy, span, span, COL_PANEL_BG, true)
-  for i = 0, 10 do
+  for i = 1, 9 do
     local offset = i * cell_sz
     cv:line(gx + offset, gy, gx + offset, gy + span, COL_GRID_LINE, 1)
     cv:line(gx, gy + offset, gx + span, gy + offset, COL_GRID_LINE, 1)
   end
 
+  local c_mid = cell_sz // 2
   for y = 0, 9 do
     for x = 0, 9 do
       local cx = gx + x * cell_sz
       local cy = gy + y * cell_sz
       local val = my_shots[y][x]
-      local c_mid = math.floor(cell_sz / 2)
 
       if val == "0" then
         if ghost_grid and ghost_grid[y][x] > 0 then
@@ -2246,8 +2491,10 @@ local function draw_target_radar()
       if (game_state == STATE_MY_TURN or game_state == STATE_ENEMY_TURN) and target_cur_x == x and target_cur_y == y then
         local r_col = tx_pending ~= nil and COL_STATUS_AMBER or COL_RETICLE
         cv:rect(cx, cy, cell_sz, cell_sz, r_col, false)
-        cv:rect(cx + c_mid - 3, cy + c_mid - 1, 6, 2, r_col, true)
-        cv:rect(cx + c_mid - 1, cy + c_mid - 3, 2, 6, r_col, true)
+        local r_half = math.max(3, math.floor(cell_sz * 0.35))
+        local r_bar  = math.max(2, math.floor(cell_sz * 0.12))
+        cv:rect(cx + c_mid - r_half, cy + c_mid - math.floor(r_bar / 2), r_half * 2, r_bar, r_col, true)
+        cv:rect(cx + c_mid - math.floor(r_bar / 2), cy + c_mid - r_half, r_bar, r_half * 2, r_col, true)
       end
     end
   end
@@ -2260,27 +2507,27 @@ local function draw_home_fleet()
   local bcol = (shake_panel == "home" and shake_color) or COL_BORDER_NORM
   local span = cell_sz * 10
   local pw = home_panel.w
+  local title_y = s2 and (home_panel.y - th(f_sm) - 2) or 19
 
-  draw_text(home_panel.x + 2, 19, "HOME FLEET", COL_TEXT_DIM, 12)
+  draw_text(home_panel.x + 2, title_y, "HOME FLEET", COL_TEXT_DIM, f_sm)
   box(px, py, pw, pw, COL_PANEL_BG, bcol)
 
   local gx = px + 2
   local gy = py + 2
 
-  cv:rect(gx, gy, span, span, COL_PANEL_BG, true)
-  for i = 0, 10 do
+  for i = 1, 9 do
     local offset = i * cell_sz
     cv:line(gx + offset, gy, gx + offset, gy + span, COL_GRID_LINE, 1)
     cv:line(gx, gy + offset, gx + span, gy + offset, COL_GRID_LINE, 1)
   end
 
+  local c_mid = cell_sz // 2
   for y = 0, 9 do
     for x = 0, 9 do
       local cx = gx + x * cell_sz
       local cy = gy + y * cell_sz
       local sid = my_board[y][x]
       local shot = enemy_shots[y][x]
-      local c_mid = math.floor(cell_sz / 2)
 
       if sid > 0 then
         if shot == "H" or shot == "S" or (shot >= "1" and shot <= "5") then
@@ -2302,9 +2549,58 @@ local function draw_home_fleet()
   end
 end
 
+-- Draw Side Panel: Tactical Command & Action Controls (T-Display P4 Landscape)
+local function draw_side_controls()
+  if not s2 or side_panel.w <= 0 then return end
+  local sx, sy, sw, sh = side_panel.x, side_panel.y, side_panel.w, side_panel.h
+
+  draw_text(sx + 2, sy - th(f_sm) - 2, "TACTICAL COMMAND", COL_STATUS_GREEN, f_sm)
+  box(sx, sy, sw, sh, COL_PANEL_BG, COL_BORDER_NORM)
+
+  -- Target Coordinate Info
+  box(sx + 14, sy + 14, sw - 28, 48, COL_BAR_BG, COL_BORDER_NORM)
+  draw_text(sx + 24, sy + 20, "TARGET AIM:", COL_TEXT_DIM, f_xs)
+  local aim_str = format_coord(target_cur_x, target_cur_y)
+  draw_text(sx + 24 + tw("TARGET AIM: ", f_xs), sy + 18, aim_str, COL_RETICLE, f_lg)
+
+  -- Big Touch FIRE Button
+  local fire_btn_y = sy + 70
+  local fire_btn_h = 54
+  local can_fire = (game_state == STATE_MY_TURN and tx_pending == nil)
+  local fire_bg = can_fire and 0x771111 or 0x1A222B
+  local fire_border = can_fire and COL_HIT or COL_BORDER_NORM
+  local fire_txt_col = can_fire and 0xFFFFFF or COL_TEXT_DIM
+  box(sx + 14, fire_btn_y, sw - 28, fire_btn_h, fire_bg, fire_border)
+  local f_label = can_fire and ("[ TAP TO FIRE: " .. aim_str .. " ]") or (tx_pending and "WAITING ACK..." or "ENEMY TURN...")
+  draw_text_centered(sx + 14, fire_btn_y + math.floor((fire_btn_h - th(f_md)) / 2), sw - 28, f_label, fire_txt_col, f_md)
+
+  -- Match Telemetry Box
+  local tel_y = fire_btn_y + fire_btn_h + 12
+  box(sx + 14, tel_y, sw - 28, 100, COL_BAR_BG, COL_BORDER_NORM)
+  draw_text(sx + 24, tel_y + 12, "MATCH ID: " .. (match_id ~= "" and match_id or "NONE"), COL_TEXT_BRIGHT, f_xs)
+  draw_text(sx + 24, tel_y + 34, "PEER: " .. (is_ai_match and "OFFLINE AI" or enemy_callsign), COL_STATUS_AMBER, f_xs)
+  draw_text(sx + 24, tel_y + 56, "COMMS: " .. (peer_dm_verified and "DIRECT (DM)" or "#battleship"), COL_STATUS_GREEN, f_xs)
+  draw_text(sx + 24, tel_y + 78, "FLEET LOSSES: " .. tostring(my_sunk_count) .. " / 5 SUNK", my_sunk_count > 0 and COL_HIT or COL_STATUS_GREEN, f_xs)
+
+  -- Mute Button / Quick Sound Toggle
+  local snd_btn_y = tel_y + 112
+  local snd_btn_h = 44
+  box(sx + 14, snd_btn_y, sw - 28, snd_btn_h, COL_BAR_BG, COL_BORDER_NORM)
+  draw_text_centered(sx + 14, snd_btn_y + math.floor((snd_btn_h - th(f_xs)) / 2), sw - 28, sound_on and "[SOUND: ON]" or "[SOUND: MUTED]", sound_on and COL_STATUS_GREEN or COL_HIT, f_xs)
+
+  -- Return to Lobby Button on Game Over
+  if game_state == STATE_GAME_OVER or game_state == STATE_AUDIT then
+    local ret_y = snd_btn_y + snd_btn_h + 10
+    local ret_h = math.min(50, sh - (ret_y - sy) - 10)
+    if ret_h >= 36 then
+      box(sx + 14, ret_y, sw - 28, ret_h, 0x0B2E1C, COL_STATUS_GREEN)
+      draw_text_centered(sx + 14, ret_y + math.floor((ret_h - th(f_md)) / 2), sw - 28, "[ RETURN TO LOBBY ]", COL_STATUS_GREEN, f_md)
+    end
+  end
+end
+
 -- Draw Ship Placement Setup Grid
 local function draw_setup_screen()
-  box(0, 0, W, H, COL_BG, nil)
   draw_top_bar()
 
   -- Left Panel: Placement Grid
@@ -2312,26 +2608,26 @@ local function draw_setup_screen()
   local py = target_panel.y
   local pw = target_panel.w
   local span = cell_sz * 10
+  local title_y = s2 and (target_panel.y - th(f_sm) - 2) or 19
 
-  draw_text(px + 2, 19, "DEPLOYMENT GRID", COL_TEXT_DIM, 12)
+  draw_text(px + 2, title_y, "DEPLOYMENT GRID", COL_TEXT_DIM, f_sm)
   box(px, py, pw, pw, COL_PANEL_BG, COL_STATUS_GREEN)
 
   local gx = px + 2
   local gy = py + 2
 
-  cv:rect(gx, gy, span, span, COL_PANEL_BG, true)
-  for i = 0, 10 do
+  for i = 1, 9 do
     local offset = i * cell_sz
     cv:line(gx + offset, gy, gx + offset, gy + span, COL_GRID_LINE, 1)
     cv:line(gx, gy + offset, gx + span, gy + offset, COL_GRID_LINE, 1)
   end
 
+  local c_mid = cell_sz // 2
   for y = 0, 9 do
     for x = 0, 9 do
       local cx = gx + x * cell_sz
       local cy = gy + y * cell_sz
       local sid = my_board[y][x]
-      local c_mid = math.floor(cell_sz / 2)
       if sid > 0 then
         cv:rect(cx + 2, cy + 2, cell_sz - 4, cell_sz - 4, COL_OWN_FLEET, true)
       else
@@ -2373,16 +2669,18 @@ local function draw_setup_screen()
     end
   end
 
-  -- Right Panel: Fleet Checklist & Instructions
+  -- Center / Right Panel: Fleet Checklist & Instructions
   local rx = home_panel.x
   local ry = home_panel.y
   local rw = home_panel.w
   local rh = home_panel.h
+  local rtitle_y = s2 and (home_panel.y - th(f_sm) - 2) or 19
 
-  draw_text(rx + 2, 19, "FLEET STATUS", COL_STATUS_GREEN, 12)
+  draw_text(rx + 2, rtitle_y, "FLEET STATUS", COL_STATUS_GREEN, f_sm)
   box(rx, ry, rw, rh, COL_PANEL_BG, COL_BORDER_NORM)
 
-  local sy = ry + 5
+  local sy = ry + (s2 and 12 or 5)
+  local row_gap = s2 and 28 or 13
   for i = 1, 5 do
     local spec = SHIP_SPECS[i]
     local placed = (my_ships[i] ~= nil)
@@ -2390,44 +2688,99 @@ local function draw_setup_screen()
 
     local txt = string.format("%d.%s(%d)", i, spec.abbr, spec.len)
     local col = placed and COL_OWN_FLEET or (is_cur and COL_RETICLE or COL_TEXT_DIM)
-    draw_text(rx + 6, sy, txt, col, 12)
+    draw_text(rx + 8, sy, txt, col, s2 and f_md or 12)
     local status_mark = placed and "[OK]" or (is_cur and "[AIM]" or "[..]")
-    draw_text(rx + rw - 34, sy, status_mark, col, 12)
-    sy = sy + 13
+    draw_text(rx + rw - (s2 and 54 or 34), sy, status_mark, col, s2 and f_md or 12)
+    sy = sy + row_gap
   end
 
-  -- Clean divider line below 5.DD(2) without overlapping
-  draw_line(rx + 4, ry + 73, rx + rw - 4, ry + 73, COL_GRID_LINE, 1)
+  if not s2 then
+    -- Clean divider line below 5.DD(2) on compact screens
+    draw_line(rx + 4, ry + 73, rx + rw - 4, ry + 73, COL_GRID_LINE, 1)
 
-  local btn_x = rx + 4
-  local btn_w = rw - 8
+    local btn_x = rx + 4
+    local btn_w = rw - 8
 
-  if fleet_locked then
-    box(btn_x, ry + 77, btn_w, 36, COL_BAR_BG, COL_STATUS_AMBER)
-    draw_text_centered(btn_x, ry + 82, btn_w, is_host and "WAITING PEER" or "SCANNING...", COL_STATUS_AMBER, 12)
-    draw_text_centered(btn_x, ry + 97, btn_w, "[TAP/ENT] PING", COL_TEXT_BRIGHT, 12)
-  elseif setup_ship_idx <= 5 then
-    local rot_txt = string.format("DIR: %s", setup_dir == "H" and "HORIZ" or "VERT")
-    draw_text(rx + 8, ry + 80, rot_txt, COL_RETICLE, 12)
-    draw_text(rx + 8, ry + 96, "[R] Rotate", COL_TEXT_BRIGHT, 12)
+    if fleet_locked then
+      box(btn_x, ry + 77, btn_w, 36, COL_BAR_BG, COL_STATUS_AMBER)
+      draw_text_centered(btn_x, ry + 82, btn_w, is_host and "WAITING PEER" or "SCANNING...", COL_STATUS_AMBER, 12)
+      draw_text_centered(btn_x, ry + 97, btn_w, "[TAP/ENT] PING", COL_TEXT_BRIGHT, 12)
+    elseif setup_ship_idx <= 5 then
+      local rot_txt = string.format("DIR: %s", setup_dir == "H" and "HORIZ" or "VERT")
+      draw_text(rx + 8, ry + 80, rot_txt, COL_RETICLE, 12)
+      draw_text(rx + 8, ry + 96, "[R] Rotate", COL_TEXT_BRIGHT, 12)
+    else
+      box(btn_x, ry + 77, btn_w, 36, 0x0B2E1C, COL_STATUS_GREEN)
+      draw_text_centered(btn_x, ry + 82, btn_w, "FLEET READY!", COL_STATUS_GREEN, 12)
+      draw_text_centered(btn_x, ry + 97, btn_w, "[CONFIRM]", COL_TEXT_BRIGHT, 12)
+    end
   else
-    box(btn_x, ry + 77, btn_w, 36, 0x0B2E1C, COL_STATUS_GREEN)
-    draw_text_centered(btn_x, ry + 82, btn_w, "FLEET READY!", COL_STATUS_GREEN, 12)
-    draw_text_centered(btn_x, ry + 97, btn_w, "[CONFIRM]", COL_TEXT_BRIGHT, 12)
+    -- High-DPI / Wide screen (T-Display P4): Dedicated Side Action Panel
+    local sx, ss_y, sw, sh = side_panel.x, side_panel.y, side_panel.w, side_panel.h
+    draw_text(sx + 2, ss_y - th(f_sm) - 2, "DEPLOYMENT CONTROLS", COL_STATUS_GREEN, f_sm)
+    box(sx, ss_y, sw, sh, COL_PANEL_BG, COL_BORDER_NORM)
+
+    -- Current Ship Box
+    box(sx + 14, ss_y + 14, sw - 28, 56, COL_BAR_BG, COL_BORDER_NORM)
+    if setup_ship_idx <= 5 then
+      local spec = SHIP_SPECS[setup_ship_idx]
+      draw_text(sx + 24, ss_y + 20, "CURRENT SHIP:", COL_TEXT_DIM, f_xs)
+      draw_text(sx + 24, ss_y + 38, string.format("%s (LENGTH: %d)", spec.name:upper(), spec.len), COL_RETICLE, f_md)
+    else
+      draw_text(sx + 24, ss_y + 20, "FLEET STATUS:", COL_TEXT_DIM, f_xs)
+      draw_text(sx + 24, ss_y + 38, "ALL 5 SHIPS DEPLOYED!", COL_STATUS_GREEN, f_md)
+    end
+
+    -- Touch Button 1: Rotate Direction
+    local r_btn_y = ss_y + 82
+    local r_btn_h = 52
+    local rot_txt = string.format("[ DIR: %s ] (TAP TO ROTATE)", setup_dir == "H" and "HORIZONTAL" or "VERTICAL")
+    box(sx + 14, r_btn_y, sw - 28, r_btn_h, COL_BAR_BG, COL_STATUS_AMBER)
+    draw_text_centered(sx + 14, r_btn_y + math.floor((r_btn_h - th(f_md)) / 2), sw - 28, rot_txt, COL_STATUS_AMBER, f_md)
+
+    -- Touch Button 2: Reset Board
+    local c_btn_y = ss_y + 146
+    local c_btn_h = 52
+    box(sx + 14, c_btn_y, sw - 28, c_btn_h, COL_BAR_BG, COL_BORDER_NORM)
+    draw_text_centered(sx + 14, c_btn_y + math.floor((c_btn_h - th(f_md)) / 2), sw - 28, "[ RESET FLEET ]", COL_TEXT_DIM, f_md)
+
+    -- Touch Button 3: Confirm / Ready
+    local ok_btn_y = ss_y + 210
+    local ok_btn_h = 60
+    if fleet_locked then
+      box(sx + 14, ok_btn_y, sw - 28, ok_btn_h, COL_BAR_BG, COL_STATUS_AMBER)
+      draw_text_centered(sx + 14, ok_btn_y + 10, sw - 28, is_host and "HOSTING LOBBY..." or "SEEKING HOST...", COL_STATUS_AMBER, f_md)
+      draw_text_centered(sx + 14, ok_btn_y + 34, sw - 28, "[TAP TO RE-PING]", COL_TEXT_BRIGHT, f_sm)
+
+      local unl_btn_y = ss_y + 282
+      local unl_btn_h = 48
+      box(sx + 14, unl_btn_y, sw - 28, unl_btn_h, COL_BAR_BG, COL_HIT)
+      draw_text_centered(sx + 14, unl_btn_y + math.floor((unl_btn_h - th(f_md)) / 2), sw - 28, "[ UNLOCK FLEET ]", COL_HIT, f_md)
+    elseif setup_ship_idx > 5 then
+      box(sx + 14, ok_btn_y, sw - 28, ok_btn_h, 0x0B2E1C, COL_STATUS_GREEN)
+      draw_text_centered(sx + 14, ok_btn_y + math.floor((ok_btn_h - th(f_md)) / 2), sw - 28, "[ CONFIRM & LAUNCH BATTLE ]", COL_STATUS_GREEN, f_md)
+    else
+      box(sx + 14, ok_btn_y, sw - 28, ok_btn_h, 0x11161C, COL_BORDER_NORM)
+      draw_text_centered(sx + 14, ok_btn_y + math.floor((ok_btn_h - th(f_sm)) / 2), sw - 28, "TAP GRID CELLS TO PLACE SHIPS", COL_TEXT_DIM, f_sm)
+    end
   end
 
   -- Bottom Bar
   box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
   draw_line(0, bot_y, W, bot_y, COL_BORDER_NORM, 1)
+  local y1 = bot_y + (s2 and 8 or 4)
+  local y2 = bot_y + (s2 and 26 or 20)
+  local f_bar = s2 and f_sm or 12
+
   if fleet_locked then
-    draw_text(10, bot_y + 4, combat_log, COL_STATUS_AMBER, 12)
-    draw_text(10, bot_y + 20, "[Enter] Re-send   [C] Unlock   [Q] Lobby", COL_TEXT_BRIGHT, 12)
+    draw_text(s2 and 16 or 10, y1, combat_log, COL_STATUS_AMBER, f_bar)
+    draw_text(s2 and 16 or 10, y2, "[Enter] Re-send   [C] Unlock   [Q] Lobby", COL_TEXT_BRIGHT, f_bar)
   elseif setup_ship_idx <= 5 then
-    draw_text(10, bot_y + 4, string.format("PLACING: %s (LEN %d)", SHIP_SPECS[setup_ship_idx].name, SHIP_SPECS[setup_ship_idx].len), COL_RETICLE, 12)
-    draw_text(10, bot_y + 20, "[WASD] Aim  [R] Rotate  [Ent] Place", COL_TEXT_BRIGHT, 12)
+    draw_text(s2 and 16 or 10, y1, string.format("PLACING: %s (LEN %d)", SHIP_SPECS[setup_ship_idx].name, SHIP_SPECS[setup_ship_idx].len), COL_RETICLE, f_bar)
+    draw_text(s2 and 16 or 10, y2, "[WASD/Tap] Aim/Place  [R] Rotate  [Ent] Place", COL_TEXT_BRIGHT, f_bar)
   else
-    draw_text(10, bot_y + 4, "FLEET DEPLOYED! READY FOR BATTLE.", COL_STATUS_GREEN, 12)
-    draw_text(10, bot_y + 20, "[Enter/Space] CONFIRM   [C] Reset", COL_TEXT_BRIGHT, 12)
+    draw_text(s2 and 16 or 10, y1, "FLEET DEPLOYED! READY FOR BATTLE.", COL_STATUS_GREEN, f_bar)
+    draw_text(s2 and 16 or 10, y2, "[Enter/Space] CONFIRM   [C] Reset", COL_TEXT_BRIGHT, f_bar)
   end
 end
 
@@ -2436,15 +2789,19 @@ local function draw_bottom_bar()
   box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
   draw_line(0, bot_y, W, bot_y, COL_BORDER_NORM, 1)
 
+  local text_y1 = bot_y + (s2 and 8 or 4)
+  local text_y2 = bot_y + (s2 and 26 or 20)
+  local f_bar = s2 and f_sm or 12
+
   if game_state == STATE_AUDIT or game_state == STATE_GAME_OVER then
     local banner_col = audit_passed and COL_STATUS_GREEN or COL_HIT
-    draw_text(10, bot_y + 4, audit_status_msg, banner_col, 12)
-    draw_text(10, bot_y + 20, "[Enter/Space] RETURN TO LOBBY  [M] Mute", COL_RETICLE, 12)
+    draw_text(s2 and 16 or 10, text_y1, audit_status_msg, banner_col, f_bar)
+    draw_text(s2 and 16 or 10, text_y2, "[Enter/Space] RETURN TO LOBBY  [M] Mute", COL_RETICLE, f_bar)
     return
   end
 
   -- Combat log / action status line
-  draw_text(10, bot_y + 4, combat_log, COL_TEXT_BRIGHT, 12)
+  draw_text(s2 and 16 or 10, text_y1, combat_log, COL_TEXT_BRIGHT, f_bar)
 
   -- Contextual key hints
   local hints = ""
@@ -2452,26 +2809,18 @@ local function draw_bottom_bar()
     if tx_pending ~= nil then
       hints = "[WAITING FOR PACKET ACK]  [M] Mute"
     else
-      hints = string.format("[WASD] Aim (%s)  [Enter] FIRE  [M] Mute", format_coord(target_cur_x, target_cur_y))
+      hints = string.format("[WASD/Touch] Aim (%s)  [Enter/Tap] FIRE  [M] Mute", format_coord(target_cur_x, target_cur_y))
     end
   elseif game_state == STATE_ENEMY_TURN then
     hints = "[DEFENDING] Awaiting enemy shot... [M] Mute"
   end
-  draw_text(10, bot_y + 20, hints, COL_RETICLE, 12)
+  draw_text(s2 and 16 or 10, text_y2, hints, COL_RETICLE, f_bar)
 end
 
 -- Draw Main Lobby Screen
 local function draw_lobby_screen()
-  box(0, 0, W, H, COL_BG, nil)
   draw_top_bar()
 
-  -- Tactical Banner
-  box(14, 26, 292, 40, COL_PANEL_BG, COL_BORDER_NORM)
-  draw_text(24, 31, "GRID STRIKE: NAVAL LORAMESH", COL_STATUS_GREEN, 14)
-  draw_text(24, 48, "1v1 LOCKSTEP TACTICAL RADAR", COL_TEXT_DIM, 12)
-
-  -- Career Stats Widget
-  box(14, 72, 292, 26, COL_PANEL_BG, COL_BORDER_NORM)
   local win_rate = 0
   if career_stats.matches > 0 then
     win_rate = math.floor((career_stats.wins / career_stats.matches) * 100)
@@ -2479,75 +2828,184 @@ local function draw_lobby_screen()
   local stat_line = string.format("CAREER: %dW - %dL (%d%%) | ACC: %d%%",
     career_stats.wins, career_stats.losses, win_rate,
     (career_stats.hits + career_stats.misses) > 0 and math.floor((career_stats.hits / (career_stats.hits + career_stats.misses)) * 100) or 0)
-  draw_text(24, 78, stat_line, COL_STATUS_AMBER, 12)
 
-  -- Menu Options
   local options = {
     { key = "[1]", title = "HOST LORA MATCH (#battleship)" },
     { key = "[2]", title = "JOIN LORA MATCH (#battleship)" },
     { key = "[3]", title = "VS AI (OFFLINE HUNT/TARGET)" },
   }
 
-  local oy = 104
-  for i, opt in ipairs(options) do
-    box(14, oy, 292, 22, COL_PANEL_BG, COL_BORDER_NORM)
-    draw_text(24, oy + 4, opt.key, COL_RETICLE, 12)
-    draw_text(52, oy + 4, opt.title, COL_TEXT_BRIGHT, 12)
-    oy = oy + 26
-  end
-
   local _, ch_exists = ensure_channel(GAME_CHANNEL)
-  local lby = math.max(182, H - 24)
-  box(0, lby, W, H - lby, COL_BAR_BG, COL_BORDER_NORM)
-  if ch_exists then
-    draw_text(10, lby + 5, "KEYS: [1] Host  [2] Join  [3] Offline AI  [M] Mute", COL_STATUS_GREEN, 12)
+
+  if s2 then
+    local lw = math.min(860, W - 48)
+    local lx = math.floor((W - lw) / 2)
+
+    -- Tactical Banner
+    box(lx, 42, lw, 62, COL_PANEL_BG, COL_BORDER_NORM)
+    draw_text(lx + 24, 48, "GRID STRIKE: NAVAL LORAMESH", COL_STATUS_GREEN, f_lg)
+    draw_text(lx + 24, 76, "1v1 LOCKSTEP TACTICAL RADAR", COL_TEXT_DIM, f_sm)
+
+    -- Career Stats Widget
+    box(lx, 114, lw, 44, COL_PANEL_BG, COL_BORDER_NORM)
+    draw_text(lx + 24, 126, stat_line, COL_STATUS_AMBER, f_sm)
+
+    local oy = 170
+    for i, opt in ipairs(options) do
+      box(lx, oy, lw, 52, COL_PANEL_BG, COL_BORDER_NORM)
+      draw_text(lx + 24, oy + 14, opt.key, COL_RETICLE, f_md)
+      draw_text(lx + 80, oy + 14, opt.title, COL_TEXT_BRIGHT, f_md)
+      oy = oy + 62
+    end
+
+    box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
+    if ch_exists then
+      draw_text(24, bot_y + 16, "KEYS/TOUCH: [1] Host  [2] Join  [3] Offline AI  [M] Mute", COL_STATUS_GREEN, f_sm)
+    else
+      draw_text(24, bot_y + 16, "[!] #battleship NOT FOUND. ADD IN CHATS (+)", COL_STATUS_AMBER, f_sm)
+    end
   else
-    draw_text(10, lby + 5, "[!] #battleship NOT FOUND. ADD IN CHATS (+)", COL_STATUS_AMBER, 12)
+    -- Tactical Banner
+    box(14, 26, 292, 40, COL_PANEL_BG, COL_BORDER_NORM)
+    draw_text(24, 31, "GRID STRIKE: NAVAL LORAMESH", COL_STATUS_GREEN, 14)
+    draw_text(24, 48, "1v1 LOCKSTEP TACTICAL RADAR", COL_TEXT_DIM, 12)
+
+    -- Career Stats Widget
+    box(14, 72, 292, 26, COL_PANEL_BG, COL_BORDER_NORM)
+    draw_text(24, 78, stat_line, COL_STATUS_AMBER, 12)
+
+    local oy = 104
+    for i, opt in ipairs(options) do
+      box(14, oy, 292, 22, COL_PANEL_BG, COL_BORDER_NORM)
+      draw_text(24, oy + 4, opt.key, COL_RETICLE, 12)
+      draw_text(52, oy + 4, opt.title, COL_TEXT_BRIGHT, 12)
+      oy = oy + 26
+    end
+
+    local lby = math.max(182, H - 24)
+    box(0, lby, W, H - lby, COL_BAR_BG, COL_BORDER_NORM)
+    if ch_exists then
+      draw_text(10, lby + 5, "KEYS: [1] Host  [2] Join  [3] Offline AI  [M] Mute", COL_STATUS_GREEN, 12)
+    else
+      draw_text(10, lby + 5, "[!] #battleship NOT FOUND. ADD IN CHATS (+)", COL_STATUS_AMBER, 12)
+    end
   end
 end
 
 -- Draw Post-Game / Audit Overlay (Kept for interface compatibility, rendered in bottom bar)
 local function draw_audit_overlay()
-  -- Status now rendered directly in draw_bottom_bar() to keep radar grid 100% visible
+  -- Status rendered in draw_bottom_bar() and draw_side_controls()
 end
 
 -- Draw Hot-Resume Crash Recovery Modal
 local function draw_resume_modal()
-  box(20, 32, 280, 140, COL_PANEL_BG, COL_RETICLE)
-  draw_text(30, 42, "UNFINISHED MATCH DETECTED!", COL_STATUS_AMBER, 14)
+  if s2 then
+    local mw, mh = 560, 260
+    local mx = math.floor((W - mw) / 2)
+    local my = math.floor((H - mh) / 2)
+    box(mx, my, mw, mh, COL_PANEL_BG, COL_RETICLE)
+    draw_text(mx + 28, my + 24, "UNFINISHED MATCH DETECTED!", COL_STATUS_AMBER, f_lg)
 
-  local info = string.format("ID: %s  |  SEQ: %02d", match_id, local_seq)
-  draw_text(30, 66, info, COL_TEXT_BRIGHT, 12)
-  draw_text(30, 84, "State restored from flash storage.", COL_TEXT_DIM, 12)
+    local info = string.format("ID: %s  |  SEQ: %02d", match_id, local_seq)
+    draw_text(mx + 28, my + 64, info, COL_TEXT_BRIGHT, f_md)
+    draw_text(mx + 28, my + 94, "State restored from flash storage.", COL_TEXT_DIM, f_sm)
 
-  box(30, 110, 115, 30, COL_BAR_BG, COL_STATUS_GREEN)
-  draw_text(40, 118, "[1] RESUME", COL_STATUS_GREEN, 12)
+    local bw = 230
+    local bh = 54
+    local by = my + 160
+    box(mx + 28, by, bw, bh, COL_BAR_BG, COL_STATUS_GREEN)
+    draw_text_centered(mx + 28, by + math.floor((bh - th(f_md)) / 2), bw, "[1] RESUME", COL_STATUS_GREEN, f_md)
 
-  box(165, 110, 115, 30, COL_BAR_BG, COL_HIT)
-  draw_text(175, 118, "[2] ABANDON", COL_HIT, 12)
+    box(mx + mw - bw - 28, by, bw, bh, COL_BAR_BG, COL_HIT)
+    draw_text_centered(mx + mw - bw - 28, by + math.floor((bh - th(f_md)) / 2), bw, "[2] ABANDON", COL_HIT, f_md)
 
-  local lby = math.max(182, H - 24)
-  box(0, lby, W, H - lby, COL_BAR_BG, COL_BORDER_NORM)
-  draw_text(10, lby + 5, "Press [1]/[Enter] to Resume, [2] to Abandon", COL_TEXT_BRIGHT, 12)
+    box(0, bot_y, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
+    draw_text(24, bot_y + 16, "Press [1]/[Enter] to Resume, [2] to Abandon", COL_TEXT_BRIGHT, f_sm)
+  else
+    box(20, 32, 280, 140, COL_PANEL_BG, COL_RETICLE)
+    draw_text(30, 42, "UNFINISHED MATCH DETECTED!", COL_STATUS_AMBER, 14)
+
+    local info = string.format("ID: %s  |  SEQ: %02d", match_id, local_seq)
+    draw_text(30, 66, info, COL_TEXT_BRIGHT, 12)
+    draw_text(30, 84, "State restored from flash storage.", COL_TEXT_DIM, 12)
+
+    box(30, 110, 115, 30, COL_BAR_BG, COL_STATUS_GREEN)
+    draw_text(40, 118, "[1] RESUME", COL_STATUS_GREEN, 12)
+
+    box(165, 110, 115, 30, COL_BAR_BG, COL_HIT)
+    draw_text(175, 118, "[2] ABANDON", COL_HIT, 12)
+
+    local lby = math.max(182, H - 24)
+    box(0, lby, W, H - lby, COL_BAR_BG, COL_BORDER_NORM)
+    draw_text(10, lby + 5, "Press [1]/[Enter] to Resume, [2] to Abandon", COL_TEXT_BRIGHT, 12)
+  end
 end
 
 -- Draw Retry / TX Failed Modal
 local function draw_retry_modal()
-  box(20, 32, 280, 140, COL_PANEL_BG, COL_HIT)
-  draw_text(30, 42, "TRANSMISSION TIMEOUT", COL_HIT, 14)
-  draw_text(30, 66, "5 attempts exceeded without ACK reply.", COL_TEXT_BRIGHT, 12)
-  draw_text(30, 84, "Peer node unreachable or out of range.", COL_TEXT_DIM, 12)
+  if s2 then
+    local mw, mh = 560, 260
+    local mx = math.floor((W - mw) / 2)
+    local my = math.floor((H - mh) / 2)
+    box(mx, my, mw, mh, COL_PANEL_BG, COL_HIT)
+    draw_text(mx + 28, my + 24, "TRANSMISSION TIMEOUT", COL_HIT, f_lg)
+    draw_text(mx + 28, my + 64, "5 attempts exceeded without ACK reply.", COL_TEXT_BRIGHT, f_md)
+    draw_text(mx + 28, my + 94, "Peer node unreachable or out of range.", COL_TEXT_DIM, f_sm)
 
-  box(30, 110, 115, 30, COL_BAR_BG, COL_STATUS_AMBER)
-  draw_text(40, 118, "[1] RESEND NOW", COL_STATUS_AMBER, 12)
+    local bw = 230
+    local bh = 54
+    local by = my + 160
+    box(mx + 28, by, bw, bh, COL_BAR_BG, COL_STATUS_AMBER)
+    draw_text_centered(mx + 28, by + math.floor((bh - th(f_md)) / 2), bw, "[1] RESEND NOW", COL_STATUS_AMBER, f_md)
 
-  box(165, 110, 115, 30, COL_BAR_BG, COL_HIT)
-  draw_text(175, 118, "[2] FORFEIT", COL_HIT, 12)
+    box(mx + mw - bw - 28, by, bw, bh, COL_BAR_BG, COL_HIT)
+    draw_text_centered(mx + mw - bw - 28, by + math.floor((bh - th(f_md)) / 2), bw, "[2] FORFEIT", COL_HIT, f_md)
+  else
+    box(20, 32, 280, 140, COL_PANEL_BG, COL_HIT)
+    draw_text(30, 42, "TRANSMISSION TIMEOUT", COL_HIT, 14)
+    draw_text(30, 66, "5 attempts exceeded without ACK reply.", COL_TEXT_BRIGHT, 12)
+    draw_text(30, 84, "Peer node unreachable or out of range.", COL_TEXT_DIM, 12)
+
+    box(30, 110, 115, 30, COL_BAR_BG, COL_STATUS_AMBER)
+    draw_text(40, 118, "[1] RESEND NOW", COL_STATUS_AMBER, 12)
+
+    box(165, 110, 115, 30, COL_BAR_BG, COL_HIT)
+    draw_text(175, 118, "[2] FORFEIT", COL_HIT, 12)
+  end
 end
 
 -- Main Draw Screen Router
 draw_screen = function()
   if not cv then return end
+
+  -- Forced Horizontal (Landscape) Screen Play for P4 / High-DPI Portrait
+  if port then
+    cv:fill(COL_BG)
+    box(0, 0, W, top_h, COL_BAR_BG, nil)
+    draw_line(0, top_h, W, top_h, COL_BORDER_NORM, 1)
+    draw_text(16, s2 and 5 or 3, "[ORIENTATION]", COL_STATUS_AMBER, f_sm)
+
+    local cx = math.floor(W / 2)
+    local px, py = 16, top_h + 16
+    local bw, bh = W - px * 2, H - top_h - bot_h - 32
+    box(px, py, bw, bh, COL_PANEL_BG, COL_BORDER_NORM)
+    local my = py + math.floor(bh * 0.25)
+
+    draw_text_centered(px, my, bw, "[ ROTATE DEVICE ]", COL_RETICLE, f_xl)
+    draw_text_centered(px, my + th(f_xl) + 14, bw, "GRID STRIKE: NAVAL LORAMESH", COL_STATUS_GREEN, f_lg)
+    draw_text_centered(px, my + th(f_xl) + th(f_lg) + 24, bw, "Battleship requires horizontal screen play.", COL_TEXT_DIM, f_sm)
+    draw_text_centered(px, my + th(f_xl) + th(f_lg) + th(f_sm) + 34, bw, "Please rotate your device to Landscape.", COL_RETICLE, f_sm)
+    draw_text_centered(px, my + th(f_xl) + th(f_lg) + th(f_sm) * 2 + 46, bw, "(Settings > Display > Orientation > Landscape)", COL_TEXT_DIM, f_xs)
+
+    local by = H - bot_h
+    box(0, by, W, bot_h, COL_BAR_BG, COL_BORDER_NORM)
+    local bw_b, bh_b = W - 32, bot_h - 12
+    local bx, bby = 16, by + 6
+    box(bx, bby, bw_b, bh_b, 0x11161C, nil)
+    draw_text_centered(bx, bby + math.floor((bh_b - th(f_sm)) / 2), bw_b, "ROTATE TO LANDSCAPE TO PLAY", COL_TEXT_DIM, f_sm)
+    return
+  end
+
   cv:fill(COL_BG)
 
   if game_state == STATE_RESUME_MODAL then
@@ -2572,6 +3030,9 @@ draw_screen = function()
   draw_top_bar()
   draw_target_radar()
   draw_home_fleet()
+  if s2 and side_panel.w > 0 then
+    draw_side_controls()
+  end
   draw_bottom_bar()
 
   if show_retry_modal then
@@ -2583,6 +3044,8 @@ end
 
 -- Keyboard & Trackball Input Handler
 function app.on_key(key)
+  if port then return end
+
   local raw_key = tostring(key or "")
   local k = raw_key:lower()
   if raw_key == " " then
@@ -2664,6 +3127,7 @@ function app.on_key(key)
         tx_pending.next_wait = 6000
         tx_pending.waiting_pace = false
         peer_dm_verified = false
+        peer_dm_allowed = false
         local ok, err = mesh_send(opponent_id, tx_pending.payload)
         if (not ok and (err == "too fast" or err == "rate limited")) or (ok and err == "paced") then
           tx_pending.waiting_pace = true
@@ -2818,7 +3282,7 @@ end
 
 -- Touchscreen & Trackball Input Handler
 function app.on_input(ev)
-  if not ev then return end
+  if not ev or port then return end
 
   if ev.type == "key" then
     app.on_key(ev.key)
@@ -2834,8 +3298,16 @@ function app.on_input(ev)
     local tx, ty = I(ev.x), I(ev.y)
     local is_tb_center = (tx == math.floor(W / 2) and ty == math.floor(H / 2))
 
-    -- Audio toggle tap (Top right)
-    if ty <= 24 and tx >= 230 then
+    -- Audio toggle tap (Top right or side panel sound button)
+    local is_vol_tap = false
+    if s2 then
+      is_vol_tap = (ty <= top_h and tx >= W - 200) or
+                   (side_panel.w > 0 and tx >= side_panel.x + 14 and tx <= side_panel.x + side_panel.w - 14 and
+                    ty >= side_panel.y + 248 and ty <= side_panel.y + 292)
+    else
+      is_vol_tap = (ty <= 24 and tx >= 230)
+    end
+    if is_vol_tap then
       sound_on = not sound_on
       if sys.toast then
         sys.toast(sound_on and "Sound ON" or "Sound MUTED")
@@ -2846,41 +3318,87 @@ function app.on_input(ev)
 
     -- Resume Modal Taps
     if game_state == STATE_RESUME_MODAL then
-      if ty >= 105 and ty <= 145 then
-        if tx >= 30 and tx <= 145 then
-          app.on_key("1")
-        elseif tx >= 165 and tx <= 280 then
-          app.on_key("2")
+      if s2 then
+        local mw, mh = 560, 260
+        local mx = math.floor((W - mw) / 2)
+        local my = math.floor((H - mh) / 2)
+        local bw, bh, by = 230, 54, my + 160
+        if ty >= by and ty <= by + bh then
+          if tx >= mx + 28 and tx <= mx + 28 + bw then
+            app.on_key("1")
+          elseif tx >= mx + mw - bw - 28 and tx <= mx + mw - 28 then
+            app.on_key("2")
+          end
+        elseif is_tb_center then
+          app.on_key("enter")
         end
-      elseif is_tb_center then
-        app.on_key("enter")
+      else
+        if ty >= 105 and ty <= 145 then
+          if tx >= 30 and tx <= 145 then
+            app.on_key("1")
+          elseif tx >= 165 and tx <= 280 then
+            app.on_key("2")
+          end
+        elseif is_tb_center then
+          app.on_key("enter")
+        end
       end
       return
     end
 
     -- Retry Modal Taps
     if show_retry_modal then
-      if ty >= 105 and ty <= 145 then
-        if tx >= 30 and tx <= 155 then
+      if s2 then
+        local mw, mh = 560, 260
+        local mx = math.floor((W - mw) / 2)
+        local my = math.floor((H - mh) / 2)
+        local bw, bh, by = 230, 54, my + 160
+        if ty >= by and ty <= by + bh then
+          if tx >= mx + 28 and tx <= mx + 28 + bw then
+            app.on_key("1")
+          elseif tx >= mx + mw - bw - 28 and tx <= mx + mw - 28 then
+            app.on_key("2")
+          end
+        elseif is_tb_center then
           app.on_key("1")
-        elseif tx >= 165 and tx <= 290 then
-          app.on_key("2")
         end
-      elseif is_tb_center then
-        app.on_key("1")
+      else
+        if ty >= 105 and ty <= 145 then
+          if tx >= 30 and tx <= 155 then
+            app.on_key("1")
+          elseif tx >= 165 and tx <= 290 then
+            app.on_key("2")
+          end
+        elseif is_tb_center then
+          app.on_key("1")
+        end
       end
       return
     end
 
     -- Lobby Menu Taps
     if game_state == STATE_LOBBY then
-      if tx >= 14 and tx <= 306 then
-        if ty >= 104 and ty <= 126 then
-          NetEngine.host_lobby()
-        elseif ty >= 130 and ty <= 152 then
-          NetEngine.join_lobby()
-        elseif ty >= 156 and ty <= 178 then
-          NetEngine.start_vs_ai()
+      if s2 then
+        local lw = math.min(860, W - 48)
+        local lx = math.floor((W - lw) / 2)
+        if tx >= lx and tx <= lx + lw then
+          if ty >= 170 and ty <= 222 then
+            NetEngine.host_lobby()
+          elseif ty >= 232 and ty <= 284 then
+            NetEngine.join_lobby()
+          elseif ty >= 294 and ty <= 346 then
+            NetEngine.start_vs_ai()
+          end
+        end
+      else
+        if tx >= 14 and tx <= 306 then
+          if ty >= 104 and ty <= 126 then
+            NetEngine.host_lobby()
+          elseif ty >= 130 and ty <= 152 then
+            NetEngine.join_lobby()
+          elseif ty >= 156 and ty <= 178 then
+            NetEngine.start_vs_ai()
+          end
         end
       end
       return
@@ -2888,10 +3406,37 @@ function app.on_input(ev)
 
     -- Fleet Placement Taps (Deployment Grid, Right Panel, Bottom Bar, Trackball Press)
     if game_state == STATE_SETUP then
+      -- Side Controls on P4 (s2)
+      if s2 and side_panel.w > 0 and tx >= side_panel.x and tx <= side_panel.x + side_panel.w then
+        local sy = side_panel.y
+        if fleet_locked then
+          if ty >= sy + 210 and ty <= sy + 270 then
+            NetEngine.lock_in_fleet() -- Ping
+            return
+          elseif ty >= sy + 282 and ty <= sy + 330 then
+            app.on_key("c") -- Unlock
+            return
+          end
+        else
+          if ty >= sy + 82 and ty <= sy + 134 then
+            app.on_key("r") -- Rotate H/V
+            return
+          elseif ty >= sy + 146 and ty <= sy + 198 then
+            app.on_key("c") -- Reset
+            return
+          elseif ty >= sy + 210 and ty <= sy + 270 then
+            if setup_ship_idx > 5 then
+              app.on_key("enter") -- Confirm
+            end
+            return
+          end
+        end
+      end
+
       if fleet_locked then
-        if ty >= bot_y and tx >= 235 then
+        if ty >= bot_y and tx >= math.floor(W * 0.75) then
           app.on_key("q")
-        elseif ty >= bot_y and tx >= 165 and tx < 235 then
+        elseif ty >= bot_y and tx >= math.floor(W * 0.5) and tx < math.floor(W * 0.75) then
           app.on_key("c")
         else
           app.on_key("enter")
@@ -2900,7 +3445,7 @@ function app.on_input(ev)
       end
 
       if setup_ship_idx > 5 then
-        if ty >= bot_y and tx >= 235 then
+        if ty >= bot_y and tx >= math.floor(W * 0.75) then
           app.on_key("c")
         else
           app.on_key("enter")
@@ -2921,7 +3466,7 @@ function app.on_input(ev)
         setup_cur_y = clamp(cell_y, 0, 9)
         app.on_key("enter")
         return
-      elseif ty >= home_panel.y + 73 and ty <= home_panel.y + home_panel.h and tx >= home_panel.x and tx <= home_panel.x + home_panel.w then
+      elseif not s2 and ty >= home_panel.y + 73 and ty <= home_panel.y + home_panel.h and tx >= home_panel.x and tx <= home_panel.x + home_panel.w then
         app.on_key("r")
         return
       elseif ty >= bot_y then
@@ -2931,20 +3476,32 @@ function app.on_input(ev)
     end
 
     -- Target Radar Taps (Aim and Fire)
-    if game_state == STATE_MY_TURN and tx_pending == nil then
-      local gx = target_panel.x + 2
-      local gy = target_panel.y + 2
-      local span = cell_sz * 10
-      if is_tb_center then
-        NetEngine.fire_shot(target_cur_x, target_cur_y)
-        return
-      elseif tx >= gx and tx < gx + span and ty >= gy and ty < gy + span then
-        local cell_x = math.floor((tx - gx) / cell_sz)
-        local cell_y = math.floor((ty - gy) / cell_sz)
-        target_cur_x = clamp(cell_x, 0, 9)
-        target_cur_y = clamp(cell_y, 0, 9)
-        NetEngine.fire_shot(target_cur_x, target_cur_y)
-        return
+    if (game_state == STATE_MY_TURN or game_state == STATE_ENEMY_TURN) then
+      -- Check Side Panel Touch Fire button on P4 (s2)
+      if s2 and side_panel.w > 0 and tx >= side_panel.x + 14 and tx <= side_panel.x + side_panel.w - 14 then
+        local sy = side_panel.y
+        -- Fire button: sy + 70 .. sy + 124
+        if ty >= sy + 70 and ty <= sy + 124 and game_state == STATE_MY_TURN and tx_pending == nil then
+          NetEngine.fire_shot(target_cur_x, target_cur_y)
+          return
+        end
+      end
+
+      if game_state == STATE_MY_TURN and tx_pending == nil then
+        local gx = target_panel.x + 2
+        local gy = target_panel.y + 2
+        local span = cell_sz * 10
+        if is_tb_center then
+          NetEngine.fire_shot(target_cur_x, target_cur_y)
+          return
+        elseif tx >= gx and tx < gx + span and ty >= gy and ty < gy + span then
+          local cell_x = math.floor((tx - gx) / cell_sz)
+          local cell_y = math.floor((ty - gy) / cell_sz)
+          target_cur_x = clamp(cell_x, 0, 9)
+          target_cur_y = clamp(cell_y, 0, 9)
+          NetEngine.fire_shot(target_cur_x, target_cur_y)
+          return
+        end
       end
     end
 
@@ -2975,6 +3532,7 @@ function app.on_message(m)
   elseif m.kind == "dm" and text:sub(1, 3) == "BS|" then
     -- Peer successfully delivered a direct message to us (both nodes have DM permissions & contacts)
     peer_dm_verified = true
+    peer_dm_allowed = true
   end
 
   NetEngine.process_packet(sender, text)
@@ -3016,14 +3574,7 @@ end
 -- WADAMESH Canvas Creation & Screen Open
 function app.on_open(w, h)
   compute_layout(w, h)
-
-  if ui and ui.canvas then
-    local cw = math.min(W, 480)
-    local ch = math.min(H, 480)
-    cv = ui.canvas(cw, ch)
-    if cv and cv.pos then cv:pos(0, 0) end
-  end
-
+  cv = make_cv(W, H)
   app.on_load()
   draw_screen()
 end

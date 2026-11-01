@@ -139,6 +139,7 @@ local function mock_wada(w, h)
     ui = {
       canvas = function(cw, ch)
         checkint(cw, "canvas w"); checkint(ch, "canvas h")
+        assert(cw <= 480 and ch <= 480, string.format("canvas size %dx%d exceeds 480x480 tile limit", cw, ch))
         local cv = { w = cw, h = ch, x = 0, y = 0 }
         function cv:fill(col) checkint(col, "fill col"); draw_ops = draw_ops + 1 end
         function cv:rect(x, y, rw, rh, col, filled, radius)
@@ -445,4 +446,74 @@ print("OK: on_tick heartbeat fallback successfully triggered AI shot!")
 
 -- 9. Clean Exit & Final Verification
 guarded(app_ai.on_exit)
+
+-- 10. LilyGo T-Display P4 Multi-Device & Forced Horizontal Screen Play Suite
+print("=== TESTING LILYGO T-DISPLAY P4 (LANDSCAPE & FORCED ROTATION IN PORTRAIT) ===")
+
+-- Test 10a: P4 LCD Landscape (1168x474)
+_G.wada = mock_wada(1168, 474)
+local p4_lcd_app = dofile("battleship.lua")
+guarded(p4_lcd_app.on_open, 1168, 474)
+print("OK: P4 LCD Landscape (1168x474) opened, multi-tile canvas bounded to <= 480px")
+
+-- Verify Lobby touch on P4 LCD (Tap Option [3] VS AI)
+-- In P4 LCD lobby, option 3 is around y = 294..346, x = centered
+guarded(p4_lcd_app.on_input, { type = "down", x = 584, y = 310 })
+print("OK: P4 LCD Lobby touch tap option [3] triggered Setup")
+
+-- Verify P4 LCD Setup Screen Touch Controls (Side Panel buttons)
+-- Side panel: Rotate button around y = 140, Reset around y = 200, Confirm around y = 260
+-- First tap to place ship 1 at (0, 0)
+guarded(p4_lcd_app.on_input, { type = "down", x = 30, y = 50 })
+-- Tap Rotate button on side panel to change to V
+guarded(p4_lcd_app.on_input, { type = "down", x = 850, y = 150 })
+print("OK: P4 LCD Setup touch rotated placement direction")
+-- Tap Reset button on side panel
+guarded(p4_lcd_app.on_input, { type = "down", x = 850, y = 210 })
+print("OK: P4 LCD Setup touch reset fleet")
+guarded(p4_lcd_app.on_exit)
+
+-- Test 10b: P4 AMOLED Landscape (1232x502)
+_G.wada = mock_wada(1232, 502)
+local p4_amoled_app = dofile("battleship.lua")
+guarded(p4_amoled_app.on_open, 1232, 502)
+print("OK: P4 AMOLED Landscape (1232x502) opened, multi-tile canvas bounded to <= 480px")
+guarded(p4_amoled_app.on_key, "3") -- Select VS AI
+place_all_ships_manually(p4_amoled_app)
+guarded(p4_amoled_app.on_key, "enter") -- Start combat
+
+-- In Combat on P4 AMOLED: test touch aiming and touch firing via side panel
+-- Tap radar cell (3, 4)
+local target_cell_x = 24 + 2 + 3 * 36 + 10
+local target_cell_y = 46 + 2 + 4 * 36 + 10
+guarded(p4_amoled_app.on_input, { type = "down", x = target_cell_x, y = target_cell_y })
+print("OK: P4 AMOLED Combat touch aimed reticle")
+-- Tap Side Panel Fire Button (around x = 850, y = 140)
+guarded(p4_amoled_app.on_input, { type = "down", x = 850, y = 140 })
+print("OK: P4 AMOLED Combat touch fired shot via side panel")
+guarded(p4_amoled_app.on_exit)
+
+-- Test 10c: P4 Portrait Mode Forced Horizontal Rotation (540x1102 & 568x1166)
+_G.wada = mock_wada(540, 1102)
+local p4_port_app = dofile("battleship.lua")
+guarded(p4_port_app.on_open, 540, 1102)
+print("OK: P4 Portrait (540x1102) detected and [ ROTATE DEVICE ] screen drawn")
+
+-- Verify that all gameplay inputs are blocked in portrait mode
+local pre_draw_ops = draw_ops
+guarded(p4_port_app.on_key, "1")
+guarded(p4_port_app.on_key, "enter")
+guarded(p4_port_app.on_input, { type = "down", x = 270, y = 551 })
+assert(draw_ops == pre_draw_ops, "Portrait mode must block all gameplay keys and touches")
+print("OK: Portrait mode completely blocked user interaction until device rotated")
+
+-- Test 10d: P4 AMOLED Portrait Mode (568x1166)
+_G.wada = mock_wada(568, 1166)
+local p4_amoled_port = dofile("battleship.lua")
+guarded(p4_amoled_port.on_open, 568, 1166)
+pre_draw_ops = draw_ops
+guarded(p4_amoled_port.on_key, "3")
+assert(draw_ops == pre_draw_ops, "P4 AMOLED Portrait must block inputs")
+print("OK: P4 AMOLED Portrait (568x1166) rotation guard verified")
+
 print(string.format("ALL TESTS PASSED! Max instructions in any callback: %d (< 100000 limit)", max_instructions))

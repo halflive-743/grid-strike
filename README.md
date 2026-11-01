@@ -30,6 +30,8 @@ Grid Strike implements a full 1v1 multiplayer loop over LoRa mesh featuring **st
 | Device | Display Resolution | Layout Mode | Cell Size | Radar Dimensions | Input Support |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **LilyGo T-Deck Plus** | `320 × 240` (Native) | Split Landscape | `14 × 14` px | Two `144 × 144` px panels | Physical Keyboard, Trackball, Touchscreen |
+| **LilyGo T-Display P4 (LCD)** | `1168 × 474` | Wide Landscape (Forced) | `32 × 32` px | Two `324 × 324` px panels + Side Panel | Touchscreen, Touch Buttons |
+| **LilyGo T-Display P4 (AMOLED)** | `1232 × 502` | Wide Landscape (Forced) | `34 × 34` px | Two `344 × 344` px panels + Side Panel | Touchscreen, Touch Buttons |
 
 ---
 
