@@ -37,7 +37,7 @@ if type(dofile) ~= "function" then
   return app
 end
 
--- Comprehensive Anti-Cheat Audit Verifier Test Suite for battleship.lua
+-- Comprehensive Anti-Cheat Audit Verifier Test Suite for gridstrike.lua
 
 local valid_fleet = "1:0,0,H;2:2,4,V;3:5,1,H;4:7,3,V;5:8,8,H"
 local valid_salt = "K9X2M1"
@@ -73,7 +73,7 @@ local function run_audit_test(test_name, enemy_salt, enemy_fleet, enemy_committe
   storekv["active_match"] = string.format("A3F1|ENEMY|STATE_AUDIT|10|MYSALT|MYHASH|%s|%s|%s|%s|NONE|NONE",
     enemy_committed_hash, valid_fleet, shots_str, string.rep("0", 100))
 
-  local a = dofile("battleship.lua")
+  local a = dofile("gridstrike.lua")
   a.on_open(320, 240)
   a.on_key("1") -- resume match
 

@@ -56,7 +56,7 @@ if type(dofile) ~= "function" then
   return app
 end
 
--- Extended End-to-End & Anti-Cheat Negative Test Suite for battleship.lua
+-- Extended End-to-End & Anti-Cheat Negative Test Suite for gridstrike.lua
 
 local function checkint(v, what)
   if math.tointeger(v) == nil then error(what .. ": expected integer, got " .. tostring(v)) end
@@ -155,7 +155,7 @@ local node_b = create_mock_node("NODE_B_CHALLENGER")
 
 -- Load instance for Node A
 _G.wada = node_a.wada
-local app_a = dofile("battleship.lua")
+local app_a = dofile("gridstrike.lua")
 app_a.on_open(320, 240)
 
 local function place_all_ships(target_app)
@@ -181,7 +181,7 @@ print(string.format("Node A hosted match: ID = %s on channel %s", match_id, seek
 
 -- Load instance for Node B
 _G.wada = node_b.wada
-local app_b = dofile("battleship.lua")
+local app_b = dofile("gridstrike.lua")
 app_b.on_open(320, 240)
 
 -- Node B joins match
@@ -323,7 +323,7 @@ node_c.wada.mesh.add_channel = function(chan)
 end
 
 _G.wada = node_c.wada
-local app_c = dofile("battleship.lua")
+local app_c = dofile("gridstrike.lua")
 app_c.on_open(320, 240)
 app_c.on_key("1") -- Host lobby
 assert(channel_added == "#battleship", "Game must attempt to auto-create #battleship channel when missing!")
@@ -340,7 +340,7 @@ node_d.wada.mesh.send = function(to, text)
 end
 
 _G.wada = node_d.wada
-local app_d = dofile("battleship.lua")
+local app_d = dofile("gridstrike.lua")
 app_d.on_open(320, 240)
 app_d.on_key("1")
 place_all_ships(app_d)
@@ -353,7 +353,7 @@ print("OK: Missing #battleship channel cleanly triggers toast guidance: " .. las
 -- 3. Test Inbound Channel Filter
 local node_e = create_mock_node("NODE_E_FILTER")
 _G.wada = node_e.wada
-local app_e = dofile("battleship.lua")
+local app_e = dofile("gridstrike.lua")
 app_e.on_open(320, 240)
 app_e.on_key("2") -- Join lobby
 place_all_ships(app_e)
@@ -420,7 +420,7 @@ local fw_host = create_wadamesh_firmware_node("FW_HOST")
 local fw_join = create_wadamesh_firmware_node("FW_JOIN")
 
 _G.wada = fw_host.wada
-local app_fw_host = dofile("battleship.lua")
+local app_fw_host = dofile("gridstrike.lua")
 app_fw_host.on_open(320, 240)
 app_fw_host.on_key("1")
 place_all_ships(app_fw_host)
@@ -430,7 +430,7 @@ assert(#fw_host.outbox == 1, "FW_HOST must broadcast SEEK on #battleship")
 local fw_seek = table.remove(fw_host.outbox, 1)
 
 _G.wada = fw_join.wada
-local app_fw_join = dofile("battleship.lua")
+local app_fw_join = dofile("gridstrike.lua")
 app_fw_join.on_open(320, 240)
 app_fw_join.on_key("2")
 place_all_ships(app_fw_join)
@@ -473,7 +473,7 @@ local fw_host2 = create_wadamesh_firmware_node("FW_HOST2")
 local fw_join2 = create_wadamesh_firmware_node("FW_JOIN2")
 
 _G.wada = fw_host2.wada
-local app_fw_host2 = dofile("battleship.lua")
+local app_fw_host2 = dofile("gridstrike.lua")
 app_fw_host2.on_open(320, 240)
 app_fw_host2.on_key("1")
 place_all_ships(app_fw_host2)
@@ -481,7 +481,7 @@ app_fw_host2.on_key("enter")
 local seek2 = table.remove(fw_host2.outbox, 1)
 
 _G.wada = fw_join2.wada
-local app_fw_join2 = dofile("battleship.lua")
+local app_fw_join2 = dofile("gridstrike.lua")
 app_fw_join2.on_open(320, 240)
 app_fw_join2.on_key("2")
 place_all_ships(app_fw_join2)
@@ -528,7 +528,7 @@ local fw_host3 = create_wadamesh_firmware_node("FW_HOST3")
 local fw_join3 = create_wadamesh_firmware_node("FW_JOIN3")
 
 _G.wada = fw_host3.wada
-local app_fw_host3 = dofile("battleship.lua")
+local app_fw_host3 = dofile("gridstrike.lua")
 app_fw_host3.on_open(320, 240)
 app_fw_host3.on_key("1")
 place_all_ships(app_fw_host3)
@@ -536,7 +536,7 @@ app_fw_host3.on_key("enter")
 table.remove(fw_host3.outbox, 1) -- Joiner was not in lobby yet when SEEK was broadcast
 
 _G.wada = fw_join3.wada
-local app_fw_join3 = dofile("battleship.lua")
+local app_fw_join3 = dofile("gridstrike.lua")
 app_fw_join3.on_open(320, 240)
 app_fw_join3.on_key("2")
 place_all_ships(app_fw_join3)
@@ -563,14 +563,28 @@ print("OK: Fast-path JOIN_SEEK -> RDY handshake verified!")
 
 -- Case D: Joiner stuck at SCANNING #battleship FOR HOST LOBBY while Host makes a move and waits for ACK!
 -- Reproduces exact scenario:
--- 1. Host sends BS|SEEK at t=10000ms (with high seed so Host goes first)
--- 2. Joiner locks fleet & sends BS|JOIN_SEEK (Joiner is at SCANNING #battleship FOR HOST LOBBY, match_id="", enemy_board_hash="")
+-- 1. Host sends BS|SEEK at t=10000ms (with high seed so Host goes first) on #battleship
+-- 2. Joiner locks fleet & sends BS|JOIN_SEEK on #battleship (Joiner is at SCANNING #battleship FOR HOST LOBBY, match_id="", enemy_board_hash="")
 -- 3. Host receives BS|JOIN_SEEK at t=11000ms (within 5s cooldown -> BS|RDY queued in paced_queue) and enters STATE_MY_TURN
 -- 4. Host immediately makes a move at t=12000ms (within 5s cooldown -> BS|FIRE also queued in paced_queue!)
--- 5. Verify BS|FIRE does NOT overwrite BS|RDY in paced_queue, AND even if BS|RDY is lost in RF transit,
---    when BS|FIRE arrives at Joiner, Joiner exits SCANNING, processes the shot, replies BS|RES, and Host clears ACK wait!
+-- 5. Verify BS|RDY goes on #battleship while BS|FIRE goes via DM (NEVER on #battleship!), AND even if BS|RDY is lost in RF transit,
+--    when DM BS|FIRE arrives at Joiner, Joiner exits SCANNING, processes the shot, replies BS|RES via DM, and Host clears ACK wait!
 local fw_host4 = create_wadamesh_firmware_node("FW_HOST4")
 local fw_join4 = create_wadamesh_firmware_node("FW_JOIN4")
+fw_host4.wada.mesh.contacts = function() return { { name = "FW_JOIN4" } } end
+fw_join4.wada.mesh.contacts = function() return { { name = "FW_HOST4" } } end
+fw_host4.wada.mesh.send_dm = function(to, text)
+  if fw_host4.now_ms - fw_host4.last_send_ms < 5000 then return false, "too fast" end
+  fw_host4.last_send_ms = fw_host4.now_ms
+  fw_host4.outbox[#fw_host4.outbox + 1] = { to = to, text = text, kind = "dm" }
+  return true, "sent"
+end
+fw_join4.wada.mesh.send_dm = function(to, text)
+  if fw_join4.now_ms - fw_join4.last_send_ms < 5000 then return false, "too fast" end
+  fw_join4.last_send_ms = fw_join4.now_ms
+  fw_join4.outbox[#fw_join4.outbox + 1] = { to = to, text = text, kind = "dm" }
+  return true, "sent"
+end
 -- Force Host seed > Joiner seed so Host always fires first
 local host4_rand_calls = 0
 fw_host4.wada.sys.random = function(lo, hi)
@@ -584,7 +598,7 @@ fw_join4.wada.sys.random = function(lo, hi)
 end
 
 _G.wada = fw_host4.wada
-local app_fw_host4 = dofile("battleship.lua")
+local app_fw_host4 = dofile("gridstrike.lua")
 app_fw_host4.on_open(320, 240)
 app_fw_host4.on_key("1")
 place_all_ships(app_fw_host4)
@@ -592,7 +606,7 @@ app_fw_host4.on_key("enter") -- t=10000ms: sends BS|SEEK
 table.remove(fw_host4.outbox, 1) -- Joiner missed initial SEEK
 
 _G.wada = fw_join4.wada
-local app_fw_join4 = dofile("battleship.lua")
+local app_fw_join4 = dofile("gridstrike.lua")
 app_fw_join4.on_open(320, 240)
 app_fw_join4.on_key("2")
 place_all_ships(app_fw_join4)
@@ -616,37 +630,46 @@ fw_host4.timers["lora_tx_pace"].cb()
 assert(#fw_host4.outbox == 1, "First paced packet must be BS|RDY")
 local rdy4 = table.remove(fw_host4.outbox, 1)
 assert(rdy4.text:find("^BS|RDY|"), "FIFO queue must send BS|RDY before BS|FIRE! Got: " .. rdy4.text)
+assert(rdy4.kind == "channel", "BS|RDY (joining handshake) must use #battleship channel")
 -- Simulate BS|RDY being lost over RF! (Do not deliver rdy4 to Joiner!)
 
--- At t=21000ms, pace timer fires again and sends BS|FIRE (which embeds Host's hash & seed!)
+-- At t=21000ms, pace timer fires again and sends BS|FIRE via DM (which embeds Host's hash & seed!)
 fw_host4.now_ms = 21000
 fw_host4.timers["lora_tx_pace"].cb()
 assert(#fw_host4.outbox == 1, "Second paced packet must be BS|FIRE")
 local fire4 = table.remove(fw_host4.outbox, 1)
 assert(fire4.text:find("^BS|FIRE|"), "Second paced packet must be BS|FIRE! Got: " .. fire4.text)
+assert(fire4.kind == "dm" and fire4.to == "FW_JOIN4", "Gameplay BS|FIRE must NEVER use #battleship channel; must use DM!")
 
--- Deliver BS|FIRE to Joiner (who is STILL at SCANNING #battleship FOR HOST LOBBY with match_id="" and enemy_board_hash=""!)
-fw_join4.now_ms = 21500
+-- Verify that if BS|FIRE were spoofed over #battleship channel, Joiner ignores it!
+fw_join4.now_ms = 21200
 _G.wada = fw_join4.wada
 app_fw_join4.on_message({ from = "FW_HOST4", kind = "channel", channel = "#battleship", text = fire4.text })
+assert(#fw_join4.outbox == 0, "Gameplay packets arriving on #battleship channel must be ignored!")
 
--- Verify Joiner exited SCANNING, processed the shot on seq 1, replied with BS|RES, and advanced to STATE_MY_TURN (seq 2)!
-assert(#fw_join4.outbox == 1, "Joiner at SCANNING must process Turn 1 BS|FIRE and reply with BS|RES!")
+-- Deliver DM BS|FIRE to Joiner (who is STILL at SCANNING #battleship FOR HOST LOBBY with match_id="" and enemy_board_hash=""!)
+fw_join4.now_ms = 21500
+_G.wada = fw_join4.wada
+app_fw_join4.on_message({ from = "FW_HOST4", kind = "dm", text = fire4.text })
+
+-- Verify Joiner exited SCANNING, processed the shot on seq 1, replied with BS|RES via DM, and advanced to STATE_MY_TURN (seq 2)!
+assert(#fw_join4.outbox == 1, "Joiner at SCANNING must process Turn 1 DM BS|FIRE and reply with BS|RES!")
 local res4 = table.remove(fw_join4.outbox, 1)
 assert(res4.text:find("^BS|RES|"), "Joiner reply must be BS|RES! Got: " .. res4.text)
+assert(res4.kind == "dm" and res4.to == "FW_HOST4", "Gameplay BS|RES must NEVER use #battleship channel; must use DM!")
 local join4_saved = fw_join4.storekv["active_match"] or ""
 assert(join4_saved:find("|STATE_MY_TURN|2|"), "Joiner must advance to STATE_MY_TURN at seq 2! Got: " .. join4_saved)
 
--- Deliver Joiner's BS|RES back to Host and verify Host clears ACK wait and advances to STATE_ENEMY_TURN (seq 2)!
+-- Deliver Joiner's DM BS|RES back to Host and verify Host clears ACK wait and advances to STATE_ENEMY_TURN (seq 2)!
 fw_host4.now_ms = 22000
 _G.wada = fw_host4.wada
-app_fw_host4.on_message({ from = "FW_JOIN4", kind = "channel", channel = "#battleship", text = res4.text })
+app_fw_host4.on_message({ from = "FW_JOIN4", kind = "dm", text = res4.text })
 local host4_saved = fw_host4.storekv["active_match"] or ""
 assert(host4_saved:find("|STATE_ENEMY_TURN|2|"), "Host must clear ACK wait and advance to STATE_ENEMY_TURN at seq 2! Got: " .. host4_saved)
 assert(fw_host4.timers["lora_tx_retry"] == nil, "Host retry timer must be cleared after receiving BS|RES!")
 print("OK: Joiner stuck at SCANNING + Host waiting for FIRE ACK deadlock completely resolved!")
 
--- Case E: Combat uses DMs (mesh.send_dm) when peer is in Contacts, and falls back to #battleship if DM is unanswered
+-- Case E: Verify #battleship is strictly used for Hosting/Joining and NEVER for Gameplay (even on TX retries!)
 local dm_host = create_wadamesh_firmware_node("DM_HOST")
 local dm_join = create_wadamesh_firmware_node("DM_JOIN")
 -- Both nodes have each other in Contacts and allow mesh.send_dm
@@ -668,7 +691,7 @@ dm_host.wada.sys.random = function(lo, hi) return hi == 999999 and 900000 or lo 
 dm_join.wada.sys.random = function(lo, hi) return hi == 999999 and 100000 or lo end
 
 _G.wada = dm_host.wada
-local app_dm_host = dofile("battleship.lua")
+local app_dm_host = dofile("gridstrike.lua")
 app_dm_host.on_open(320, 240)
 app_dm_host.on_key("1")
 place_all_ships(app_dm_host)
@@ -677,7 +700,7 @@ local dm_seek = table.remove(dm_host.outbox, 1)
 assert(dm_seek.kind == "channel", "Lobby SEEK must use #battleship channel")
 
 _G.wada = dm_join.wada
-local app_dm_join = dofile("battleship.lua")
+local app_dm_join = dofile("gridstrike.lua")
 app_dm_join.on_open(320, 240)
 app_dm_join.on_key("2")
 place_all_ships(app_dm_join)
@@ -701,15 +724,106 @@ _G.wada = dm_host.wada
 app_dm_host.on_key("enter")
 assert(#dm_host.outbox == 1, "Host must send Turn 1 BS|FIRE")
 local dm_fire_pkt = table.remove(dm_host.outbox, 1)
-assert(dm_fire_pkt.kind == "dm" and dm_fire_pkt.to == "DM_JOIN", "Combat BS|FIRE must use mesh.send_dm first! Got kind=" .. tostring(dm_fire_pkt.kind))
+assert(dm_fire_pkt.kind == "dm" and dm_fire_pkt.to == "DM_JOIN", "Combat BS|FIRE must use mesh.send_dm! Got kind=" .. tostring(dm_fire_pkt.kind))
+
+-- Simulate DM BS|FIRE lost in RF transit and retry timer firing -> retry must ALSO use DM, NEVER #battleship!
+dm_host.now_ms = 29000
+for _ = 1, 6 do
+  dm_host.timers["lora_tx_retry"].cb()
+end
+assert(#dm_host.outbox == 1, "Host must retry Turn 1 BS|FIRE")
+local dm_fire_retry = table.remove(dm_host.outbox, 1)
+assert(dm_fire_retry.kind == "dm" and dm_fire_retry.to == "DM_JOIN",
+  "Retried gameplay packet must NEVER fall back to #battleship channel; must stay on DM! Got kind=" .. tostring(dm_fire_retry.kind))
 
 -- Deliver DM BS|FIRE to Joiner -> Joiner must reply with BS|RES via DM!
-dm_join.now_ms = 22000
+dm_join.now_ms = 29000
 _G.wada = dm_join.wada
-app_dm_join.on_message({ from = "DM_HOST", kind = "dm", text = dm_fire_pkt.text })
+app_dm_join.on_message({ from = "DM_HOST", kind = "dm", text = dm_fire_retry.text })
 assert(#dm_join.outbox == 1, "Joiner must reply with BS|RES")
 local dm_res_pkt = table.remove(dm_join.outbox, 1)
 assert(dm_res_pkt.kind == "dm" and dm_res_pkt.to == "DM_HOST", "Combat BS|RES must use mesh.send_dm! Got kind=" .. tostring(dm_res_pkt.kind))
-print("OK: Combat uses DMs (mesh.send_dm) with automatic #battleship fallback!")
+print("OK: #battleship channel is strictly used for Hosting/Joining and NEVER for Gameplay!")
+
+-- Case F: Self-Echo & Self-DM Prevention ("Half Live " T-Deck vs CrowPanel)
+-- Verify that:
+--   1. Repeater echoes of T-Deck's own packets (even with 23-byte "..." truncation or trailing space/emoji differences)
+--      are ignored and NEVER set opponent_id to T-Deck's own name ("Half Live ").
+--   2. When CrowPanel sends RDY or Turn 1 FIRE, T-Deck locks onto CrowPanel's contact name and DMs CrowPanel, never itself.
+local tdeck_node = create_wadamesh_firmware_node("Half Live \240\159\143\180")
+local crow_node  = create_wadamesh_firmware_node("CrowPanel 9in")
+tdeck_node.wada.mesh.contacts = function() return { { name = "CrowPanel 9in" } } end
+crow_node.wada.mesh.contacts  = function() return { { name = "Half Live \240\159\143\180" } } end
+tdeck_node.wada.mesh.send_dm = function(to, text)
+  assert(not to:find("^Half Live"), "T-Deck must NEVER attempt to DM itself! Tried to DM: " .. tostring(to))
+  if to ~= "CrowPanel 9in" then return false, "no such contact" end
+  if tdeck_node.now_ms - tdeck_node.last_send_ms < 5000 then return false, "too fast" end
+  tdeck_node.last_send_ms = tdeck_node.now_ms
+  tdeck_node.outbox[#tdeck_node.outbox + 1] = { to = to, text = text, kind = "dm" }
+  return true, "sent"
+end
+crow_node.wada.mesh.send_dm = function(to, text)
+  if to ~= "Half Live \240\159\143\180" then return false, "no such contact" end
+  if crow_node.now_ms - crow_node.last_send_ms < 5000 then return false, "too fast" end
+  crow_node.last_send_ms = crow_node.now_ms
+  crow_node.outbox[#crow_node.outbox + 1] = { to = to, text = text, kind = "dm" }
+  return true, "sent"
+end
+crow_node.wada.sys.random  = function(lo, hi) return hi == 999999 and 900000 or lo end
+tdeck_node.wada.sys.random = function(lo, hi) return hi == 999999 and 100000 or hi end
+
+-- T-Deck joins and locks fleet -> sends JOIN_SEEK
+_G.wada = tdeck_node.wada
+local app_tdeck = dofile("gridstrike.lua")
+app_tdeck.on_open(320, 240)
+app_tdeck.on_key("2")
+place_all_ships(app_tdeck)
+app_tdeck.on_key("enter")
+local tdeck_jseek = table.remove(tdeck_node.outbox, 1)
+
+-- Repeater echoes T-Deck's own JOIN_SEEK and a fake SEEK with truncated/trimmed sender "Half Live " / "Half Live..."
+app_tdeck.on_message({ from = "Half Live ", kind = "channel", channel = "#battleship", text = tdeck_jseek.text })
+app_tdeck.on_message({ from = "Half Live...", kind = "channel", channel = "#battleship", text = "BS|SEEK|70A7|Half Live |1|100000|DEADBEEF" })
+assert(#tdeck_node.outbox == 0, "T-Deck must completely ignore repeater echoes of its own callsign!")
+
+-- CrowPanel hosts, receives T-Deck's JOIN_SEEK, and replies with RDY + Turn 1 FIRE
+_G.wada = crow_node.wada
+local app_crow = dofile("gridstrike.lua")
+app_crow.on_open(1024, 600)
+app_crow.on_input({ type = "down", x = 150, y = 520 }) -- HOST on 1024x600
+place_all_ships(app_crow)
+app_crow.on_key("enter")
+table.remove(crow_node.outbox, 1) -- SEEK
+
+crow_node.now_ms = 16000
+app_crow.on_message({ from = "Half Live...", kind = "channel", channel = "#battleship", text = tdeck_jseek.text })
+local crow_rdy = table.remove(crow_node.outbox, 1)
+
+-- Deliver CrowPanel's RDY to T-Deck
+_G.wada = tdeck_node.wada
+app_tdeck.on_message({ from = "CrowPanel 9in", kind = "channel", channel = "#battleship", text = crow_rdy.text })
+
+-- CrowPanel fires at A1 (0,0) on Seq 1 via DM
+crow_node.now_ms = 22000
+_G.wada = crow_node.wada
+app_crow.on_key("enter")
+local crow_fire1 = table.remove(crow_node.outbox, 1)
+assert(crow_fire1.kind == "dm" and crow_fire1.to == "Half Live \240\159\143\180",
+  "CrowPanel must resolve T-Deck full contact name and DM it!")
+
+-- T-Deck receives CrowPanel's Turn 1 FIRE at A1 -> replies with RES via DM to CrowPanel (not self!) and fires Turn 2 via DM
+tdeck_node.now_ms = 22000
+_G.wada = tdeck_node.wada
+app_tdeck.on_message({ from = "CrowPanel 9in", kind = "dm", text = crow_fire1.text })
+assert(#tdeck_node.outbox == 1, "T-Deck must send BS|RES on Seq 1 via DM to CrowPanel")
+local tdeck_res1 = table.remove(tdeck_node.outbox, 1)
+assert(tdeck_res1.kind == "dm" and tdeck_res1.to == "CrowPanel 9in", "T-Deck BS|RES must go to CrowPanel 9in!")
+
+tdeck_node.now_ms = 28000
+app_tdeck.on_key("enter") -- T-Deck fires on Seq 2
+assert(#tdeck_node.outbox == 1, "T-Deck must send BS|FIRE on Seq 2 via DM to CrowPanel")
+local tdeck_fire2 = table.remove(tdeck_node.outbox, 1)
+assert(tdeck_fire2.kind == "dm" and tdeck_fire2.to == "CrowPanel 9in", "T-Deck Seq 2 BS|FIRE must go to CrowPanel 9in!")
+print("OK: Self-echo & Self-DM prevention ('Half Live ' T-Deck vs CrowPanel) verified!")
 
 print("=== ALL EXTENDED 1v1 MULTIPLAYER TESTS PASSED ===")

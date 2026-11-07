@@ -175,8 +175,9 @@
 <div class="device-bar">
   <button class="dev-pill active" onclick="setDevice('p4_lcd')">LilyGo T-Display P4 LCD (1168×474)</button>
   <button class="dev-pill" onclick="setDevice('p4_amoled')">LilyGo T-Display P4 AMOLED (1232×502)</button>
+  <button class="dev-pill" onclick="setDevice('crowpanel')">Elecrow CrowPanel Adv 9" / 10.1" (1024×600)</button>
   <button class="dev-pill" onclick="setDevice('tdeck')">LilyGo T-Deck (320×240)</button>
-  <button class="dev-pill" onclick="setDevice('p4_port')">LilyGo P4 Portrait (Rotation Lock)</button>
+  <button class="dev-pill" onclick="setDevice('p4_port')">Portrait (Rotation Lock)</button>
 </div>
 
 <div class="device-shell" id="chassis">
@@ -277,8 +278,9 @@ function playBeep(freq = 600, duration = 0.08, type = "sine") {
 const DEVICES = {
   p4_lcd:    { w: 1168, h: 474, title: "LILYGO T-DISPLAY P4 LCD · 1168×474", port: false, s2: true },
   p4_amoled: { w: 1232, h: 502, title: "LILYGO T-DISPLAY P4 AMOLED · 1232×502", port: false, s2: true },
+  crowpanel: { w: 1024, h: 600, title: "ELECROW CROWPANEL ADVANCED 9\" / 10.1\" · 1024×600 TOUCH", port: false, s2: true },
   tdeck:     { w: 320,  h: 240, title: "LILYGO T-DECK PLUS · 320×240", port: false, s2: false },
-  p4_port:   { w: 540,  h: 1102, title: "LILYGO P4 PORTRAIT · FORCED ROTATION SCREEN", port: true, s2: true }
+  p4_port:   { w: 600,  h: 1024, title: "PORTRAIT · FORCED ROTATION SCREEN", port: true, s2: true }
 };
 
 let curDevKey = "p4_lcd";
@@ -528,20 +530,26 @@ function draw_screen() {
     // Header
     ctx.fillStyle = "#0d141b";
     ctx.fillRect(0, 0, W, 28);
-    ctx.fillStyle = "#15b6a6";
+    ctx.fillStyle = "#00ff66";
     ctx.font = "bold 13px monospace";
     ctx.textAlign = "left";
-    ctx.fillText("FLEET DEPLOYMENT", 16, 19);
+    ctx.fillText("[FLEET SETUP]", 16, 19);
 
-    const cs = s2 ? 32 : 14;
-    const ox = s2 ? 50 : 20;
-    const oy = s2 ? 60 : 36;
+    const padX = (W >= 1100) ? 24 : ((W >= 960) ? 20 : 10);
+    const gapX = (W >= 1100) ? 20 : ((W >= 960) ? 18 : 12);
+    const cs = s2 ? ((W >= 1100) ? 36 : 34) : 14;
+    const pw = 10 * cs + 4;
+    const availH = H - 52 - 28 - 26;
+    const oy = s2 ? (46 + ((availH - pw >= 40) ? Math.floor((availH - pw) / 2) : 0)) : 32;
+    const ox = padX;
+
+    drawPanelFrame(ox, oy, pw, pw, "DEPLOYMENT GRID", "#00ff66");
 
     // Draw 10x10 Grid
     for (let y = 0; y < 10; y++) {
       for (let x = 0; x < 10; x++) {
-        const px = ox + x * cs;
-        const py = oy + y * cs;
+        const px = ox + 2 + x * cs;
+        const py = oy + 2 + y * cs;
         ctx.fillStyle = (myBoard[y][x] > 0) ? "#00ff66" : "#0d141c";
         ctx.fillRect(px, py, cs - 1, cs - 1);
         ctx.strokeStyle = "#182432";
@@ -549,25 +557,40 @@ function draw_screen() {
       }
     }
 
-    // Controls
-    const rx = ox + 11 * cs + 20;
-    ctx.fillStyle = "#e6e9ed";
-    ctx.font = s2 ? "16px monospace" : "12px monospace";
-    const curShip = SHIPS[setupShipIdx];
-    if (curShip) {
-      ctx.fillText(`Deploying: ${curShip.name} (${curShip.len})`, rx, oy + 20);
-      ctx.fillStyle = "#f58220";
-      ctx.fillText(`Direction: ${setupDir === "H" ? "HORIZONTAL" : "VERTICAL"}`, rx, oy + 50);
-      ctx.fillStyle = "#94a3b8";
-      ctx.fillText(`[R] Rotate Direction`, rx, oy + 90);
-      ctx.fillText(`[C] Reset Fleet`, rx, oy + 120);
-      ctx.fillStyle = "#15b6a6";
-      ctx.fillText(`[ENTER] Auto Place / Confirm`, rx, oy + 160);
-    } else {
-      ctx.fillStyle = "#00ff66";
-      ctx.fillText("FLEET DEPLOYED & LOCKED!", rx, oy + 40);
-      ctx.fillStyle = "#f58220";
-      ctx.fillText("Click [CONFIRM] or press ENTER to start!", rx, oy + 80);
+    // Center Panel: Fleet Status
+    const hx = ox + pw + gapX;
+    drawPanelFrame(hx, oy, pw, pw, "FLEET STATUS", "#00ff66");
+    let sy = oy + (s2 ? 26 : 16);
+    SHIPS.forEach((s, idx) => {
+      const placed = idx < setupShipIdx;
+      const isCur = idx === setupShipIdx;
+      ctx.fillStyle = placed ? "#00ff66" : (isCur ? "#ffaa00" : "#64748b");
+      ctx.font = s2 ? "bold 16px monospace" : "12px monospace";
+      ctx.fillText(`${idx + 1}.${s.abbr}(${s.len})`, hx + 12, sy);
+      ctx.fillText(placed ? "[OK]" : (isCur ? "[AIM]" : "[..]"), hx + pw - (s2 ? 56 : 36), sy);
+      sy += s2 ? 28 : 13;
+    });
+
+    // Side Panel on s2 (T-Display P4 & Elecrow CrowPanel Advanced)
+    if (s2) {
+      const sx = hx + pw + gapX;
+      const sw = W - sx - padX;
+      drawPanelFrame(sx, oy, sw, pw, "DEPLOYMENT", "#00ff66");
+      const curShip = SHIPS[setupShipIdx];
+      ctx.fillStyle = "#64748b";
+      ctx.font = "13px monospace";
+      ctx.fillText(curShip ? "CURRENT SHIP:" : "FLEET STATUS:", sx + 22, oy + 32);
+      ctx.fillStyle = curShip ? "#ffaa00" : "#00ff66";
+      ctx.font = "bold 15px monospace";
+      ctx.fillText(curShip ? `${curShip.name.toUpperCase()} (LEN: ${curShip.len})` : "ALL 5 SHIPS READY!", sx + 22, oy + 54);
+
+      drawMetallicButton(sx + 14, oy + 82, sw - 28, 52, `DIR: ${setupDir === "H" ? "HORIZ" : "VERT"} (ROTATE)`, "#ffaa00");
+      drawMetallicButton(sx + 14, oy + 146, sw - 28, 52, "RESET FLEET", "#94a3b8");
+      if (setupShipIdx >= 5) {
+        drawMetallicButton(sx + 14, oy + 210, sw - 28, 60, "LAUNCH BATTLE", "#00ff66", "#00ff66");
+      } else {
+        drawMetallicButton(sx + 14, oy + 210, sw - 28, 60, "TAP CELLS TO PLACE", "#64748b");
+      }
     }
 
     // Bottom Bar with Menu button
@@ -578,7 +601,7 @@ function draw_screen() {
     ctx.strokeRect(0, H - botH, W, 1);
     ctx.fillStyle = "#15b6a6";
     ctx.font = "12px monospace";
-    ctx.fillText("[WASD/Tap] Aim/Place  [R] Rotate", 16, H - botH + 28);
+    ctx.fillText(s2 ? "Tap Grid to Place Ship  |  Tap [ROTATE] / [RESET]" : "[WASD/Tap] Aim/Place  [R] Rotate", 16, H - botH + 28);
     drawMenuButton();
     return;
   }
@@ -594,18 +617,25 @@ function draw_screen() {
     ctx.fillStyle = "#00ff66";
     ctx.font = "bold 13px monospace";
     ctx.textAlign = "left";
-    ctx.fillText("COMBAT: YOUR TURN", 16, 19);
+    ctx.fillText("[YOUR TURN]", 16, 19);
 
-    const cs = s2 ? 30 : 13;
-    const oy = s2 ? 50 : 34;
-    const targetOx = s2 ? 30 : 10;
-    const homeOx = s2 ? targetOx + cs * 10 + 40 : 166;
+    const padX = (W >= 1100) ? 24 : ((W >= 960) ? 20 : 10);
+    const gapX = (W >= 1100) ? 20 : ((W >= 960) ? 18 : 12);
+    const cs = s2 ? ((W >= 1100) ? 36 : 34) : 14;
+    const pw = 10 * cs + 4;
+    const availH = H - 52 - 28 - 26;
+    const oy = s2 ? (46 + ((availH - pw >= 40) ? Math.floor((availH - pw) / 2) : 0)) : 32;
+    const targetOx = padX;
+    const homeOx = s2 ? targetOx + pw + gapX : 166;
+
+    drawPanelFrame(targetOx, oy, pw, pw, "TARGET RADAR", "#f58220");
+    drawPanelFrame(homeOx, oy, pw, pw, "HOME FLEET", "#00ff66");
 
     // Target Radar
     for (let y = 0; y < 10; y++) {
       for (let x = 0; x < 10; x++) {
-        const px = targetOx + x * cs;
-        const py = oy + y * cs;
+        const px = targetOx + 2 + x * cs;
+        const py = oy + 2 + y * cs;
         const st = myShots[y][x];
         ctx.fillStyle = (st === 1) ? "#ff3333" : ((st === 2) ? "#3388aa" : "#0d141c");
         ctx.fillRect(px, py, cs - 1, cs - 1);
@@ -614,7 +644,7 @@ function draw_screen() {
         if (targetReticle.x === x && targetReticle.y === y) {
           ctx.strokeStyle = "#ffaa00";
           ctx.lineWidth = 2;
-          ctx.strokeRect(px - 1, py - 1, cs + 1, cs + 1);
+          ctx.strokeRect(px, py, cs, cs);
         }
       }
     }
@@ -622,8 +652,8 @@ function draw_screen() {
     // Home Fleet
     for (let y = 0; y < 10; y++) {
       for (let x = 0; x < 10; x++) {
-        const px = homeOx + x * cs;
-        const py = oy + y * cs;
+        const px = homeOx + 2 + x * cs;
+        const py = oy + 2 + y * cs;
         const hasShip = (myBoard[y][x] > 0);
         const hit = (enemyShots[y][x] === 1);
         ctx.fillStyle = hit ? "#ff3333" : (hasShip ? "#00aa44" : "#0d141c");
@@ -631,6 +661,22 @@ function draw_screen() {
         ctx.strokeStyle = "#182432";
         ctx.strokeRect(px, py, cs, cs);
       }
+    }
+
+    // Side Command Panel on s2
+    if (s2) {
+      const sx = homeOx + pw + gapX;
+      const sw = W - sx - padX;
+      drawPanelFrame(sx, oy, sw, pw, "TACTICAL COMMAND", "#00ff66");
+      const coord = String.fromCharCode(65 + targetReticle.x) + (targetReticle.y + 1);
+      ctx.fillStyle = "#64748b";
+      ctx.font = "13px monospace";
+      ctx.fillText("TARGET AIM:", sx + 22, oy + 38);
+      ctx.fillStyle = "#ffaa00";
+      ctx.font = "bold 18px monospace";
+      ctx.fillText(coord, sx + 120, oy + 38);
+      drawMetallicButton(sx + 14, oy + 70, sw - 28, 54, `FIRE: ${coord}`, "#ffffff", "#ff3333");
+      drawMetallicButton(sx + 14, oy + 248, sw - 28, 44, soundOn ? "SOUND: ON" : "SOUND: MUTED", soundOn ? "#00ff66" : "#ff3333");
     }
 
     // Bottom Bar with Menu button
@@ -676,19 +722,75 @@ cv.addEventListener("click", e => {
     return;
   }
 
+  const padX = (W >= 1100) ? 24 : ((W >= 960) ? 20 : 10);
+  const gapX = (W >= 1100) ? 20 : ((W >= 960) ? 18 : 12);
+  const cs = s2 ? ((W >= 1100) ? 36 : 34) : 14;
+  const pw = 10 * cs + 4;
+  const availH = H - 52 - 28 - 26;
+  const oy = s2 ? (46 + ((availH - pw >= 40) ? Math.floor((availH - pw) / 2) : 0)) : 32;
+  const targetOx = padX;
+  const homeOx = s2 ? targetOx + pw + gapX : 166;
+  const sideOx = homeOx + pw + gapX;
+
   if (gameState === "SETUP") {
-    autoPlaceFleet();
-    playBeep(900, 0.12);
-    startCombat();
+    if (s2 && tx >= sideOx) {
+      if (ty >= oy + 82 && ty <= oy + 134) {
+        setupDir = (setupDir === "H") ? "V" : "H";
+        playBeep(500, 0.06);
+        draw_screen();
+        return;
+      } else if (ty >= oy + 146 && ty <= oy + 198) {
+        startSetup(true);
+        playBeep(400, 0.08);
+        return;
+      } else if (ty >= oy + 210 && ty <= oy + 270 && setupShipIdx >= 5) {
+        playBeep(900, 0.12);
+        startCombat();
+        return;
+      }
+      return;
+    }
+    const gx = Math.floor((tx - (targetOx + 2)) / cs);
+    const gy = Math.floor((ty - (oy + 2)) / cs);
+    if (gx >= 0 && gx < 10 && gy >= 0 && gy < 10 && setupShipIdx < 5) {
+      const s = SHIPS[setupShipIdx];
+      const cx = (setupDir === "H") ? Math.min(gx, 10 - s.len) : gx;
+      const cy = (setupDir === "V") ? Math.min(gy, 10 - s.len) : gy;
+      let fits = true;
+      for (let i = 0; i < s.len; i++) {
+        const nx = (setupDir === "H") ? cx + i : cx;
+        const ny = (setupDir === "V") ? cy + i : cy;
+        if (myBoard[ny][nx] !== 0) { fits = false; break; }
+      }
+      if (fits) {
+        for (let i = 0; i < s.len; i++) {
+          const nx = (setupDir === "H") ? cx + i : cx;
+          const ny = (setupDir === "V") ? cy + i : cy;
+          myBoard[ny][nx] = setupShipIdx + 1;
+        }
+        setupShipIdx++;
+        playBeep(700, 0.08);
+        draw_screen();
+      } else {
+        playBeep(220, 0.12, "sawtooth");
+      }
+      return;
+    }
     return;
   }
 
   if (gameState === "COMBAT") {
-    const cs = s2 ? 30 : 13;
-    const oy = s2 ? 50 : 34;
-    const targetOx = s2 ? 30 : 10;
-    const gx = Math.floor((tx - targetOx) / cs);
-    const gy = Math.floor((ty - oy) / cs);
+    if (s2 && tx >= sideOx + 14 && ty >= oy + 70 && ty <= oy + 124) {
+      fireShot();
+      return;
+    }
+    if (s2 && tx >= sideOx + 14 && ty >= oy + 248 && ty <= oy + 292) {
+      soundOn = !soundOn;
+      draw_screen();
+      return;
+    }
+    const gx = Math.floor((tx - (targetOx + 2)) / cs);
+    const gy = Math.floor((ty - (oy + 2)) / cs);
     if (gx >= 0 && gx < 10 && gy >= 0 && gy < 10) {
       targetReticle.x = gx;
       targetReticle.y = gy;

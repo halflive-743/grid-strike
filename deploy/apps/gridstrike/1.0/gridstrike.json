@@ -2,7 +2,7 @@
   "id": "gridstrike",
   "name": "Grid Strike",
   "ver": "1.0",
-  "desc": "1v1 tactical naval combat over LoRa Mesh with lockstep handshakes, commit-reveal anti-cheat audit, offline AI, and auto-scaling UI for T-Deck & T-Display P4 (AMOLED/LCD).",
+  "desc": "1v1 tactical naval combat over LoRa Mesh with lockstep handshakes, commit-reveal anti-cheat audit, offline AI, and auto-scaling UI for T-Deck, T-Display P4, and Elecrow CrowPanel Advanced (9\" & 10.1\").",
   "icon": "game",
   "requires": "sdk_ext",
   "seed": false

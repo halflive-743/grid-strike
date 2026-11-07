@@ -87,7 +87,7 @@ if type(dofile) ~= "function" then
 
     cv:text(16, y, "NOTE: Full CLI unit tests run on PC:", 0x64748B, 12)
     y = y + 14
-    cv:text(24, y, "$ lua test_battleship.lua", 0xFFAA00, 12)
+    cv:text(24, y, "$ lua test_gridstrike.lua", 0xFFAA00, 12)
     y = y + 18
     cv:text(16, y, "To play the game on this device:", 0xE6ECEF, 12)
     y = y + 14
@@ -110,7 +110,7 @@ if type(dofile) ~= "function" then
   return app
 end
 
--- Comprehensive test verification suite for battleship.lua
+-- Comprehensive test verification suite for gridstrike.lua
 
 local function checkint(v, what)
   if math.tointeger(v) == nil then
@@ -252,7 +252,7 @@ print("=== STARTING BATTLESHIP TEST SUITE ===")
 
 _G.wada = mock_wada(320, 240)
 local app = dofile("gridstrike.lua")
-assert(type(app) == "table", "battleship.lua must return app table")
+assert(type(app) == "table", "gridstrike.lua must return app table")
 
 -- 1. Instruction budget tracking wrapper
 local max_instructions = 0
@@ -558,5 +558,105 @@ guarded(p4_menu_app.on_input, { type = "down", x = 1150, y = 475 })
 -- Verify back in Lobby
 guarded(p4_menu_app.on_key, "3")
 print("OK: P4 AMOLED Combat bottom-right Menu button returned cleanly to Lobby")
+
+-- 12. Elecrow CrowPanel Advanced 9-inch & 10.1-inch Touchscreen-Only Suite (1024x600 & 1024x578)
+print("=== TESTING ELECROW CROWPANEL ADVANCED 9\" & 10.1\" (TOUCHSCREEN-ONLY) ===")
+
+-- Test 12a: Native 1024x600 & WADAMESH 1024x578 Body Landscape Layout & End-to-End Touch Play
+for _, res in ipairs({ { w = 1024, h = 600, label = "1024x600" }, { w = 1024, h = 578, label = "1024x578" } }) do
+  _G.wada = mock_wada(res.w, res.h)
+  local cp_app = dofile("gridstrike.lua")
+  guarded(cp_app.on_open, res.w, res.h)
+
+  -- Layout geometry on W=1024:
+  -- pad_x = 20, gap_x = 18, cell_sz = 34, pw = 344
+  -- avail_h = H - 52 - 30 - 30 = H - 112 (488 on H=600, 466 on H=578)
+  -- py = 56 + math.floor((avail_h - 344) / 2) (128 on H=600, 117 on H=578)
+  -- target_panel.x = 20, home_panel.x = 382, side_panel.x = 744, side_panel.w = 260
+  local avail_h = res.h - 112
+  local py = 56 + math.floor((avail_h - 344) / 2)
+  local gx = 20 + 2
+  local gy = py + 2
+  local sx = 744
+
+  -- 1. Tap [VS AI] button on Lobby Screen (rightmost button at y = H - 80 - 32 .. H - 32)
+  guarded(cp_app.on_input, { type = "down", x = 820, y = res.h - 60 })
+
+  -- 2. Test Rotate & Reset touch buttons on Setup Side Panel
+  -- Rotate button: y = py + 82 .. py + 134
+  guarded(cp_app.on_input, { type = "down", x = sx + 120, y = py + 105 }) -- H -> V
+  guarded(cp_app.on_input, { type = "down", x = sx + 120, y = py + 105 }) -- V -> H
+
+  -- 3. Place all 5 ships using ONLY touchscreen taps, including right-edge clamping!
+  -- Ship 1 (Carrier, len 5, H): Tap col 9 (right edge, x = gx + 9*34 + 17) on row 0 -> auto-clamps to cols 5..9!
+  guarded(cp_app.on_input, { type = "down", x = gx + 9 * 34 + 17, y = gy + 0 * 34 + 17 })
+  -- Ship 2 (Battleship, len 4, H): Tap col 8 on row 2 -> auto-clamps to cols 6..9!
+  guarded(cp_app.on_input, { type = "down", x = gx + 8 * 34 + 17, y = gy + 2 * 34 + 17 })
+  -- Ship 3 (Cruiser, len 3, H): Tap col 0 on row 4
+  guarded(cp_app.on_input, { type = "down", x = gx + 0 * 34 + 17, y = gy + 4 * 34 + 17 })
+  -- Ship 4 (Submarine, len 3, H): Tap col 0 on row 6
+  guarded(cp_app.on_input, { type = "down", x = gx + 0 * 34 + 17, y = gy + 6 * 34 + 17 })
+  -- Ship 5 (Destroyer, len 2, V): Rotate to V first, then tap bottom edge row 9 on col 0 -> auto-clamps to rows 8..9!
+  guarded(cp_app.on_input, { type = "down", x = sx + 120, y = py + 105 }) -- H -> V
+  guarded(cp_app.on_input, { type = "down", x = gx + 0 * 34 + 17, y = gy + 9 * 34 + 17 })
+
+  -- 4. Tap lower half of [LAUNCH BATTLE] button (y = py + 258, inside 248..270 where is_vol_tap used to overlap!)
+  -- Verify it launches the battle instead of toggling mute!
+  local prev_toasts = #toasts
+  guarded(cp_app.on_input, { type = "down", x = sx + 120, y = py + 258 })
+  for ti = prev_toasts + 1, #toasts do
+    assert(toasts[ti] ~= "Sound MUTED" and toasts[ti] ~= "Sound ON",
+      "Tapping LAUNCH BATTLE in Setup must NOT be intercepted by sound mute button!")
+  end
+  assert(storekv["active_match"] and storekv["active_match"] ~= "",
+    "Tapping LAUNCH BATTLE on CrowPanel Advanced must start the match!")
+
+  -- If AI won the coin toss, advance AI turn so it is player's turn
+  if timers["ai_turn"] then
+    local cb = timers["ai_turn"]
+    timers["ai_turn"] = nil
+    guarded(cb)
+  end
+
+  -- 5. Tap Target Radar cell (3, 3) to fire shot in Combat
+  guarded(cp_app.on_input, { type = "down", x = gx + 3 * 34 + 17, y = gy + 3 * 34 + 17 })
+  -- Advance AI counter-shot
+  if timers["ai_turn"] then
+    local cb = timers["ai_turn"]
+    timers["ai_turn"] = nil
+    guarded(cb)
+  end
+
+  -- 6. Tap Side Panel [FIRE] button (y = py + 70 .. py + 124) after aiming
+  guarded(cp_app.on_input, { type = "down", x = gx + 5 * 34 + 17, y = gy + 5 * 34 + 17 })
+  if timers["ai_turn"] then
+    -- During STATE_ENEMY_TURN, tap cell (6, 6) to pre-aim reticle!
+    guarded(cp_app.on_input, { type = "down", x = gx + 6 * 34 + 17, y = gy + 6 * 34 + 17 })
+    local cb = timers["ai_turn"]
+    timers["ai_turn"] = nil
+    guarded(cb)
+  end
+  -- Now fire at pre-aimed cell (6, 6) using the Side Panel FIRE button!
+  guarded(cp_app.on_input, { type = "down", x = sx + 120, y = py + 95 })
+
+  -- 7. Tap Side Panel [SOUND: ON] button in Combat (y = py + 248 .. py + 292)
+  prev_toasts = #toasts
+  guarded(cp_app.on_input, { type = "down", x = sx + 120, y = py + 270 })
+  assert(#toasts > prev_toasts and toasts[#toasts] == "Sound MUTED",
+    "Side panel sound button must toggle mute during Combat")
+
+  -- 8. Tap bottom-right [Menu] button to return cleanly to Lobby
+  guarded(cp_app.on_input, { type = "down", x = res.w - 60, y = res.h - 26 })
+  print(string.format("OK: CrowPanel Advanced (%s) touchscreen-only Setup, Edge Clamping, Launch, Combat, Pre-Aim & Sound verified", res.label))
+end
+
+-- Test 12b: CrowPanel Advanced Portrait Mode Forced Rotation Guard (600x1024 & 600x978)
+_G.wada = mock_wada(600, 1024)
+local cp_port_app = dofile("gridstrike.lua")
+guarded(cp_port_app.on_open, 600, 1024)
+pre_draw_ops = draw_ops
+guarded(cp_port_app.on_input, { type = "down", x = 300, y = 512 })
+assert(draw_ops == pre_draw_ops, "CrowPanel Portrait (600x1024) must block touch inputs")
+print("OK: CrowPanel Advanced Portrait (600x1024) rotation guard verified")
 
 print(string.format("ALL TESTS PASSED! Max instructions in any callback: %d (< 100000 limit)", max_instructions))

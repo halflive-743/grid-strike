@@ -1,5 +1,6 @@
 -- ==============================================================================
--- GRID STRIKE: 1v1 Tactical Naval Combat for WADAMESH (LilyGo T-Deck & T-Display P4)
+-- GRID STRIKE: 1v1 Tactical Naval Combat for WADAMESH
+-- Supported Hardware: LilyGo T-Deck, LilyGo T-Display P4, Elecrow CrowPanel Advanced 9" & 10.1"
 -- Production-Ready Single-File Script: gridstrike.lua / battleship.lua
 -- ==============================================================================
 
@@ -65,14 +66,30 @@ local function I(v)
 end
 
 -- ---- Font Measurement & Geometry Helpers -------------------------------------
+-- Forward-declare s2 so tw/th can account for WADAMESH CAP_LARGE_SCREEN upscaled fonts
+local s2 = false
+
 local function tw(s, z)
   s, z = tostring(s or ""), I(z or 12)
+  if s2 then
+    -- On CAP_LARGE_SCREEN (CrowPanel Advanced & T-Display P4), WADAMESH maps:
+    -- z <= 12 -> g_font_12 (upscaled ~16pt), z <= 14 -> g_font_14 (~20pt), z >= 15 -> 24pt.
+    local cpx = (z <= 12) and 9.5 or ((z <= 14) and 11.5 or 14.0)
+    local est = I(#s * cpx)
+    if ui and ui.text_w then return math.max(I(ui.text_w(s, z)), est) end
+    return est
+  end
   if ui and ui.text_w then return I(ui.text_w(s, z)) end
   return I(#s * (z + 4) * 0.48)
 end
 
 local function th(z)
   z = I(z or 12)
+  if s2 then
+    local est = (z <= 12) and 18 or ((z <= 14) and 22 or 26)
+    if ui and ui.text_h then return math.max(I(ui.text_h(z)), est) end
+    return est
+  end
   if ui and ui.text_h then return I(ui.text_h(z)) end
   return z + 4
 end
@@ -82,7 +99,6 @@ local W, H = 320, 240
 local cv = nil
 local dname = "T-Deck"
 local port  = false
-local s2    = false
 local top_h = 18
 local bot_y = 182
 local bot_h = 48
@@ -100,10 +116,13 @@ local function compute_layout(w, h)
   local s, l = math.min(W, H), math.max(W, H)
   port = (H > W)
 
+  local bname = tostring(brd.name or brd.model or brd.id or ""):lower()
   if l >= 1185 or (W == 568 and H >= 900) or (W >= 1185 and H >= 460) then
     dname, s2 = "T-Display P4 AMOLED", true
   elseif (l >= 1050 and l < 1185) or (W == 540 and H >= 900) or (W >= 500 and W < 560 and H >= 900) then
     dname, s2 = "T-Display P4 LCD", true
+  elseif bname:find("crowpanel", 1, true) or (l >= 960 and l < 1050 and s >= 540 and s <= 620) then
+    dname, s2 = "CrowPanel Advanced", true
   elseif l >= 700 or s >= 460 then
     dname, s2 = "Large HD", true
   else
@@ -111,33 +130,42 @@ local function compute_layout(w, h)
   end
 
   if s2 then
-    f_xs, f_sm, f_md, f_lg, f_xl = 14, 14, 16, 20, 24
-    top_h = 28
+    -- Use logical size classes (12, 14, 16, 20) that WADAMESH CAP_LARGE_SCREEN
+    -- automatically maps to its upscaled 16pt / 20pt / 24pt LVGL fonts.
+    f_xs, f_sm, f_md, f_lg, f_xl = 12, 12, 14, 16, 20
+    top_h = 30
     bot_h = 52
     bot_y = H - bot_h
 
     -- Dynamic cell size and panel placement on high-res wide displays
-    local avail_h = bot_y - top_h - 26
-    local max_cs = math.floor(avail_h / 10)
-    cell_sz = math.max(20, math.min(36, max_cs))
+    -- Constrain by both vertical height and horizontal width so the right-hand
+    -- Tactical Command / Deployment touch panel always has ample width (e.g. 260px on 1024x600).
+    local avail_h = bot_y - top_h - 30
+    local pad_x = (W >= 1100) and 24 or ((W >= 960) and 20 or 14)
+    local gap_x = (W >= 1100) and 20 or ((W >= 960) and 18 or 12)
+    local min_side_w = (W >= 960) and 260 or 216
+    local max_cs_h = math.floor(avail_h / 10)
+    local max_cs_w = math.floor((W - pad_x * 2 - gap_x * 2 - min_side_w - 8) / 20)
+    cell_sz = math.max(20, math.min(36, max_cs_h, max_cs_w))
     local pw = 10 * cell_sz + 4
-    local py = top_h + 18
+    local extra_y = (avail_h - pw >= 40) and math.floor((avail_h - pw) / 2) or 0
+    local py = top_h + 26 + extra_y
 
-    target_panel.x = 24
+    target_panel.x = pad_x
     target_panel.y = py
     target_panel.w = pw
     target_panel.h = pw
 
-    home_panel.x = target_panel.x + pw + 20
+    home_panel.x = target_panel.x + pw + gap_x
     home_panel.y = py
     home_panel.w = pw
     home_panel.h = pw
 
-    -- Side action / telemetry panel on the right (P4 Landscape)
-    side_panel.x = home_panel.x + pw + 20
+    -- Side action / telemetry panel on the right (P4 & CrowPanel Advanced Landscape)
+    side_panel.x = home_panel.x + pw + gap_x
     side_panel.y = py
-    side_panel.w = math.max(120, W - side_panel.x - 24)
-    side_panel.h = pw
+    side_panel.w = math.max(120, W - side_panel.x - pad_x)
+    side_panel.h = math.max(pw, math.min(364, avail_h))
   else
     f_xs, f_sm, f_md, f_lg, f_xl = 10, 11, 12, 14, 16
     top_h = 18
@@ -1043,34 +1071,164 @@ local peer_dm_allowed  = true
 local tx_dup_nonce     = 0
 local paced_queue      = {} -- FIFO queue of { to = "...", text = "..." }
 
--- Resolve peer name against wada.mesh.contacts() (handles 23-char "..." truncation)
+-- Refresh my_callsign from wada.mesh.self() so self-echo checks always have the real node name
+local function refresh_my_callsign()
+  if mesh and type(mesh.self) == "function" then
+    local ok, self_info = pcall(mesh.self)
+    if ok and type(self_info) == "table" and type(self_info.name) == "string" and self_info.name ~= "" then
+      my_callsign = self_info.name
+    end
+  end
+  return my_callsign
+end
+
+-- Normalize a node name by stripping ChannelSenderSplit "..." ellipsis and outer whitespace
+local function clean_node_name(s)
+  if type(s) ~= "string" then return "" end
+  local out = s
+  if #out >= 4 and out:sub(-3) == "..." then
+    out = out:sub(1, #out - 3)
+  end
+  out = out:gsub("^%s+", ""):gsub("%s+$", "")
+  return out
+end
+
+-- Extract ASCII-only core of a node name (strips multi-byte UTF-8 emojis & outer spaces)
+local function ascii_node_name(s)
+  local c = clean_node_name(s)
+  c = c:gsub("[\128-\255]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+  return c
+end
+
+-- Return true if `name` refers to this device's own node name (including 23-byte "..." truncated
+-- repeater echoes or trailing-space / emoji variations like "Half Live " vs "Half Live <emoji>")
+local function is_self_sender(name)
+  if type(name) ~= "string" or name == "" then return false end
+  local self_name = refresh_my_callsign()
+  if not self_name or self_name == "" or self_name == "ADMIRAL" then return false end
+  if name == self_name then return true end
+
+  local cn = clean_node_name(name):lower()
+  local cs = clean_node_name(self_name):lower()
+  if cn ~= "" and cn == cs then return true end
+
+  -- If ChannelSenderSplit truncated `name` with "...", check if self_name starts with that prefix
+  if #name >= 4 and name:sub(-3) == "..." and #cn >= 3 then
+    if cs:sub(1, #cn) == cn then return true end
+  end
+
+  -- Compare ASCII core (e.g., when a multi-byte emoji at the end of "Half Live <emoji>" was stripped/cut)
+  local an = ascii_node_name(name):lower()
+  local as = ascii_node_name(self_name):lower()
+  if #an >= 3 and an == as then return true end
+
+  return false
+end
+
+local function is_placeholder_peer(id)
+  return (not id) or id == "" or id == "HOST" or id == "PEER" or id == "WAITING" or id == "SCANNING" or is_self_sender(id)
+end
+
+-- Resolve peer name against wada.mesh.contacts() (handles 23-char "..." truncation & paging)
 local function resolve_dm_contact(name)
   if type(name) ~= "string" or name == "" then return nil, false end
+  if is_self_sender(name) then
+    if not is_placeholder_peer(enemy_callsign) then
+      name = enemy_callsign
+    else
+      return nil, false
+    end
+  end
   if type(mesh.contacts) ~= "function" then
     return name, true
   end
-  local ok, list = pcall(mesh.contacts, 0, 250)
-  if not ok or type(list) ~= "table" then
-    return nil, false
+
+  local list = {}
+  local total = 250
+  if type(mesh.contact_count) == "function" then
+    local ok_c, cnt = pcall(mesh.contact_count)
+    if ok_c and type(cnt) == "number" and cnt > 0 then
+      total = math.min(cnt, 2000)
+    end
   end
+  local offset = 0
+  while offset < total do
+    local ok, batch = pcall(mesh.contacts, offset, 200)
+    if not ok or type(batch) ~= "table" or #batch == 0 then break end
+    for _, ct in ipairs(batch) do
+      if type(ct) == "table" and type(ct.name) == "string" and ct.name ~= "" and not is_self_sender(ct.name) then
+        list[#list + 1] = ct
+      end
+    end
+    if #batch < 200 then break end
+    offset = offset + #batch
+  end
+
+  local alt_name = (not is_placeholder_peer(enemy_callsign)) and enemy_callsign or nil
   local prefix = nil
   if #name >= 4 and name:sub(-3) == "..." then
     prefix = name:sub(1, #name - 3)
   end
+  local alt_prefix = nil
+  if alt_name and #alt_name >= 4 and alt_name:sub(-3) == "..." then
+    alt_prefix = alt_name:sub(1, #alt_name - 3)
+  end
+
+  -- 1. Exact or "..." prefix match
   for _, ct in ipairs(list) do
-    if type(ct) == "table" and type(ct.name) == "string" then
-      if ct.name == name then
-        return ct.name, true
-      end
-      if prefix and ct.name:sub(1, #prefix) == prefix then
+    if ct.name == name or (alt_name and ct.name == alt_name) then
+      return ct.name, true
+    end
+    if prefix and ct.name:sub(1, #prefix) == prefix then
+      return ct.name, true
+    end
+    if alt_prefix and ct.name:sub(1, #alt_prefix) == alt_prefix then
+      return ct.name, true
+    end
+  end
+
+  -- 2. Case-insensitive / trimmed match
+  local cn = clean_node_name(name):lower()
+  local ca = alt_name and clean_node_name(alt_name):lower() or nil
+  for _, ct in ipairs(list) do
+    local cct = clean_node_name(ct.name):lower()
+    if (cn ~= "" and cct == cn) or (ca and ca ~= "" and cct == ca) then
+      return ct.name, true
+    end
+    if prefix and cct:sub(1, #prefix) == prefix:lower() then
+      return ct.name, true
+    end
+  end
+
+  -- 3. ASCII-core match (handles emoji suffix differences)
+  local an = ascii_node_name(name):lower()
+  local aa = alt_name and ascii_node_name(alt_name):lower() or nil
+  if #an >= 3 or (aa and #aa >= 3) then
+    for _, ct in ipairs(list) do
+      local act = ascii_node_name(ct.name):lower()
+      if (#an >= 3 and act == an) or (aa and #aa >= 3 and act == aa) then
         return ct.name, true
       end
     end
   end
+
   return nil, false
 end
 
+local function is_handshake_packet(str_text)
+  if type(str_text) ~= "string" then return false end
+  return (str_text:sub(1, 8) == "BS|SEEK|")
+    or (str_text:sub(1, 13) == "BS|JOIN_SEEK|")
+    or (str_text:sub(1, 8) == "BS|JOIN|")
+    or (str_text:sub(1, 7) == "BS|RDY|")
+    or (str_text:match("^BS|ACK|[^|]+|0") ~= nil)
+end
+
 local function send_on_game_channel(str_text)
+  -- Channel #battleship is strictly reserved for hosting and joining (handshake only)
+  if not is_handshake_packet(str_text) then
+    return false, "channel reserved for lobby"
+  end
   local chan, exists = get_broadcast_channel()
   if not (mesh and mesh.send) then
     return false, "no sender"
@@ -1103,18 +1261,40 @@ local function try_send_dm(to_str, str_text)
   if not (mesh and mesh.send_dm) then
     return false, "no dm"
   end
+  -- Never attempt to DM our own node name
+  if is_self_sender(to_str) then
+    if not is_placeholder_peer(enemy_callsign) then
+      to_str = enemy_callsign
+      opponent_id = enemy_callsign
+    else
+      return false, "self target"
+    end
+  end
   local contact_name, found = resolve_dm_contact(to_str)
-  if not found or not contact_name then
-    return false, "no such contact"
+  if found and contact_name then
+    if opponent_id == "" or is_self_sender(opponent_id) or opponent_id:sub(-3) == "..." then
+      opponent_id = contact_name
+    end
+    local ok, res, reason = pcall(mesh.send_dm, contact_name, str_text)
+    if not ok then
+      return false, tostring(res)
+    end
+    if res == false then
+      return false, tostring(reason or "dm failed")
+    end
+    return true
   end
-  local ok, res, reason = pcall(mesh.send_dm, contact_name, str_text)
-  if not ok then
-    return false, tostring(res)
+  -- Fallback: let native C++ luaHostMeshSendDM scan all contacts directly if not truncated
+  if to_str ~= "" and not is_self_sender(to_str) and to_str:sub(-3) ~= "..." then
+    local ok, res, reason = pcall(mesh.send_dm, to_str, str_text)
+    if ok and res ~= false then
+      return true
+    end
+    if ok and res == false and reason and reason ~= "no such contact" then
+      return false, tostring(reason)
+    end
   end
-  if res == false then
-    return false, tostring(reason or "dm failed")
-  end
-  return true
+  return false, "no such contact"
 end
 
 local function mesh_send_raw(to, text)
@@ -1128,48 +1308,55 @@ local function mesh_send_raw(to, text)
     or (to_lower == ALT_GAME_CHANNEL:lower())
     or (to_lower == (ALT_GAME_CHANNEL:lower():gsub("^#", "")))
 
-  local is_handshake = (str_text:sub(1, 8) == "BS|SEEK|")
-    or (str_text:sub(1, 13) == "BS|JOIN_SEEK|")
-    or (str_text:sub(1, 8) == "BS|JOIN|")
-    or (str_text:sub(1, 7) == "BS|RDY|")
+  local is_handshake = is_handshake_packet(str_text)
 
-  if is_broadcast then
-    return send_on_game_channel(str_text)
-  end
-
-  -- 1. During active combat (non-handshake packets), try Direct Message (mesh.send_dm) first!
-  --    DMs use WADAMESH's 6-burst / 10s refill budget and avoid flooding #battleship.
-  --    If peer is not in Contacts or DM permission is unavailable, fall back to #battleship.
-  if peer_dm_allowed and not is_handshake and mesh.send_dm then
-    local dm_ok, dm_err = try_send_dm(to_str, str_text)
-    if dm_ok then return true end
-    if dm_err == "too fast" then return false, "too fast" end
-    if dm_err == "permission denied" then
-      peer_dm_allowed = false
-    elseif dm_err == "permission requested" then
-      if sys and sys.toast then pcall(sys.toast, "Allow DM popup for direct combat", 2500) end
+  -- 1. Hosting & Joining (Lobby Handshake ONLY): use #battleship channel
+  if is_handshake then
+    if is_broadcast or mesh.channels then
+      return send_on_game_channel(str_text)
     end
-  end
-
-  -- 2. Send on #battleship channel (used for Lobby Handshake and automatic DM fallback).
-  if mesh.channels then
-    local ch_ok, ch_err = send_on_game_channel(str_text)
-    if ch_ok then return true end
-    if ch_err == "too fast" then return false, "too fast" end
-    if ch_err == "rate limited" and mesh.send_dm then
+    if mesh.send_dm then
       local dm_ok, dm_err = try_send_dm(to_str, str_text)
       if dm_ok then return true end
       if dm_err == "too fast" then return false, "too fast" end
     end
-    return false, ch_err
+    if mesh.send then
+      local ok, res, reason = pcall(mesh.send, to_str, str_text)
+      if ok then
+        if res == false then return false, tostring(reason or "send failed") end
+        return true
+      end
+      return false, tostring(res)
+    end
+    return false, "no sender"
   end
 
-  -- 3. Fallback for test harnesses without mesh.channels
+  -- 2. Active Gameplay (FIRE, RES, ACK > 0, REV, SYNC):
+  --    NEVER use the #battleship channel for gameplay! Always send via Direct Message (DM).
+  if is_broadcast then
+    return false, "gameplay requires dm"
+  end
+
   if mesh.send_dm then
     local dm_ok, dm_err = try_send_dm(to_str, str_text)
     if dm_ok then return true end
-    if dm_err == "too fast" then return false, "too fast" end
+    if dm_err == "too fast" or dm_err == "rate limited" then
+      return false, dm_err
+    end
+    if dm_err == "permission denied" then
+      combat_log = "> DM PERM DENIED: ENABLE IN SETTINGS > APP PERMS"
+      if sys and sys.toast then pcall(sys.toast, "Enable DM in Settings > App permissions", 3000) end
+    elseif dm_err == "permission requested" then
+      combat_log = "> ALLOW DM IN SYSTEM POPUP TO PLAY"
+      if sys and sys.toast then pcall(sys.toast, "Allow DM popup for direct combat", 2500) end
+    elseif dm_err == "no such contact" then
+      combat_log = string.format("> PEER (%s) NOT IN CONTACTS FOR DM!", to_str:sub(1, 10))
+      if sys and sys.toast then pcall(sys.toast, "Add/Discover peer in Contacts for DM", 3000) end
+    end
+    return false, dm_err
   end
+
+  -- 3. Fallback for unit test harnesses without mesh.send_dm (direct peer send, never #battleship)
   if mesh.send then
     local ok, res, reason = pcall(mesh.send, to_str, str_text)
     if ok then
@@ -1480,9 +1667,6 @@ function NetEngine.start_retry_timer()
         if draw_screen then draw_screen() end
       else
         tx_pending.next_wait = 6000 + (tx_pending.retries * 2000)
-        -- If our previous attempt was a DM that went unanswered, fall back to #battleship
-        peer_dm_verified = false
-        peer_dm_allowed = false
         combat_log = string.format("> TX RETRY %d/5 [Seq %d]...", tx_pending.retries, tx_pending.seq)
         mesh_send(opponent_id, tx_pending.payload)
         if draw_screen then draw_screen() end
@@ -1540,7 +1724,8 @@ local function start_rdy_confirm_timer()
     if is_host and game_state == STATE_ENEMY_TURN and local_seq == 1 and match_id ~= "" and my_board_hash ~= "" then
       rdy_repeats = rdy_repeats + 1
       if rdy_repeats <= 3 then
-        local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+        refresh_my_callsign()
+        local payload = string.format("BS|RDY|%s|0|%d|%s|%s", match_id, handshake_seed, my_board_hash, my_callsign)
         mesh_send(opponent_id, payload)
       else
         timer_cancel("rdy_confirm")
@@ -1738,13 +1923,18 @@ function NetEngine.lock_in_fleet()
     return
   end
 
+  refresh_my_callsign()
+  if is_self_sender(opponent_id) then
+    opponent_id = ""
+  end
+
   sfx_play("TURN_ALERT")
   if is_host then
     -- If a Challenger already sent JOIN or JOIN_SEEK while Host was placing ships,
     -- complete the handshake immediately with RDY!
     if opponent_id ~= "" and enemy_board_hash ~= "" then
       timer_cancel("seek_broadcast")
-      local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+      local payload = string.format("BS|RDY|%s|0|%d|%s|%s", match_id, handshake_seed, my_board_hash, my_callsign)
       mesh_send(opponent_id, payload)
       if handshake_seed >= enemy_seed then
         local_seq = 1
@@ -1786,6 +1976,7 @@ function NetEngine.lock_in_fleet()
     -- Repeating broadcast timer every 45 seconds (preserves WADAMESH 3-msg/60s channel burst budget for RDY/FIRE)
     timer_every("seek_broadcast", 45000, function()
       if game_state == STATE_SETUP and is_host and opponent_id == "" then
+        refresh_my_callsign()
         seek_beacon_seq = seek_beacon_seq + 1
         mesh_send(GAME_CHANNEL, string.format("BS|SEEK|%s|%s|%d|%d|%s", match_id, my_callsign, seek_beacon_seq, handshake_seed, my_board_hash))
       else
@@ -1796,7 +1987,7 @@ function NetEngine.lock_in_fleet()
     if opponent_id ~= "" and match_id ~= "" then
       combat_log = string.format("> JOINING HOST [%s] (%s)...", match_id, enemy_callsign:sub(1, 8))
       if sys.toast then pcall(sys.toast, "Joining Host [" .. match_id .. "]...") end
-      local payload = string.format("BS|JOIN|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+      local payload = string.format("BS|JOIN|%s|0|%d|%s|%s", match_id, handshake_seed, my_board_hash, my_callsign)
       NetEngine.queue_tx(payload, 0)
     else
       seek_beacon_seq = seek_beacon_seq + 1
@@ -1824,6 +2015,7 @@ function NetEngine.lock_in_fleet()
       -- Repeating JOIN_SEEK scan every 20 seconds until Host replies with SEEK, RDY, or Turn 1 FIRE
       timer_every("seek_broadcast", 20000, function()
         if game_state == STATE_SETUP and not is_host and opponent_id == "" and tx_pending == nil then
+          refresh_my_callsign()
           seek_beacon_seq = seek_beacon_seq + 1
           mesh_send(GAME_CHANNEL, string.format("BS|JOIN_SEEK|0|%d|%s|%d|%s", handshake_seed, my_board_hash, seek_beacon_seq, my_callsign))
         else
@@ -1835,11 +2027,54 @@ function NetEngine.lock_in_fleet()
   if draw_screen then draw_screen() end
 end
 
+-- Update opponent_id and enemy_callsign from a verified non-self peer packet
+local function update_peer_identity(sender, callsign_hint, default_label)
+  if is_ai_match then return end
+  local clean_hint = (type(callsign_hint) == "string" and callsign_hint ~= "" and not callsign_hint:match("^R%d+$") and not is_self_sender(callsign_hint)) and callsign_hint or nil
+  local clean_sender = (type(sender) == "string" and sender ~= "" and not is_self_sender(sender)) and sender or nil
+
+  -- Prefer untruncated callsign_hint when channel sender was truncated to 23 bytes ("...")
+  local best_id = clean_sender
+  if clean_hint then
+    if not best_id or best_id:sub(-3) == "..." then
+      best_id = clean_hint
+    end
+  end
+
+  if best_id then
+    if is_placeholder_peer(opponent_id) or (opponent_id:sub(-3) == "..." and best_id:sub(-3) ~= "...") then
+      opponent_id = best_id
+    else
+      opponent_id = clean_sender or best_id
+    end
+  elseif is_placeholder_peer(opponent_id) and default_label then
+    opponent_id = default_label
+  end
+
+  if clean_hint then
+    enemy_callsign = clean_hint
+  elseif best_id and (is_placeholder_peer(enemy_callsign) or (enemy_callsign:sub(-3) == "..." and best_id:sub(-3) ~= "...")) then
+    enemy_callsign = best_id
+  elseif is_placeholder_peer(enemy_callsign) and not is_placeholder_peer(opponent_id) then
+    enemy_callsign = opponent_id
+  end
+
+  -- Retarget any queued active-gameplay packets that had a placeholder or self destination
+  if not is_placeholder_peer(opponent_id) then
+    for _, item in ipairs(paced_queue) do
+      if not is_handshake_packet(item.text) and is_placeholder_peer(item.to) then
+        item.to = opponent_id
+      end
+    end
+  end
+end
+
 -- Process incoming LoRa packet
 function NetEngine.process_packet(sender, text)
   if not text or text:sub(1, 3) ~= "BS|" then return end
+  refresh_my_callsign()
   -- Ignore our own echo if the firmware/repeater echoes channel frames with our own node name
-  if sender and sender ~= "" and sender == my_callsign and my_callsign ~= "ADMIRAL" then
+  if is_self_sender(sender) then
     return
   end
 
@@ -1851,20 +2086,25 @@ function NetEngine.process_packet(sender, text)
 
   -- 1. Lobby Seek & Join Handshake
   if ptype == "SEEK" then
+    local s_callsign = p[4]
+    local s_seed = tonumber(p[6]) or 0
+    local s_hash = (p[7] and not p[7]:match("^R%d+$")) and p[7] or ""
+    if is_self_sender(s_callsign) or (my_board_hash ~= "" and s_hash == my_board_hash and s_seed == handshake_seed) then
+      return
+    end
     if game_state == STATE_SETUP and not is_host then
-      local first_discovery = (opponent_id == "" or match_id ~= p_mid)
+      local first_discovery = (is_placeholder_peer(opponent_id) or match_id ~= p_mid)
       match_id = p_mid
-      opponent_id = (sender and sender ~= "") and sender or (p[4] or "HOST")
-      enemy_callsign = p[4] or opponent_id
-      if p[6] and p[7] and p[7] ~= "" and not p[7]:match("^R%d+$") then
-        enemy_seed = tonumber(p[6]) or enemy_seed
-        enemy_board_hash = p[7]
+      update_peer_identity(sender, s_callsign, "HOST")
+      if p[6] and s_hash ~= "" then
+        enemy_seed = s_seed > 0 and s_seed or enemy_seed
+        enemy_board_hash = s_hash
       end
       timer_cancel("seek_broadcast")
       if fleet_locked and my_board_hash ~= "" then
         if first_discovery or tx_pending == nil then
           combat_log = string.format("> FOUND HOST [%s] (%s). JOINING...", match_id, enemy_callsign)
-          local payload = string.format("BS|JOIN|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+          local payload = string.format("BS|JOIN|%s|0|%d|%s|%s", match_id, handshake_seed, my_board_hash, my_callsign)
           NetEngine.queue_tx(payload, 0)
         end
       else
@@ -1877,22 +2117,25 @@ function NetEngine.process_packet(sender, text)
 
   if ptype == "JOIN_SEEK" then
     -- Format: BS|JOIN_SEEK|0|<challenger_seed>|<challenger_hash>|<beacon_seq>|[<callsign>]
+    local j_seed = tonumber(p[4]) or 0
+    local j_hash = (p[5] and not p[5]:match("^R%d+$")) and p[5] or ""
+    local j_hint = (p[7] and p[7] ~= "" and not p[7]:match("^R%d+$")) and p[7] or nil
+    if is_self_sender(j_hint) or (my_board_hash ~= "" and j_hash == my_board_hash and j_seed == handshake_seed) then
+      return
+    end
     if is_host and match_id ~= "" then
-      local j_seed = tonumber(p[4]) or 0
-      local j_hash = (p[5] and not p[5]:match("^R%d+$")) and p[5] or ""
-      local j_callsign = (p[7] and p[7] ~= "" and not p[7]:match("^R%d+$")) and p[7] or (sender ~= "" and sender or "PEER")
+      local j_callsign = j_hint or ((sender and sender ~= "" and not is_self_sender(sender)) and sender or "PEER")
 
       if game_state == STATE_SETUP then
         -- Fast-path handshake: if Host's fleet is already locked and JOIN_SEEK includes Challenger's seed & board hash,
         -- accept it directly as a JOIN and reply with BS|RDY!
-        if fleet_locked and my_board_hash ~= "" and j_hash ~= "" and (opponent_id == "" or opponent_id == sender or enemy_callsign == j_callsign) then
-          opponent_id = (sender and sender ~= "") and sender or j_callsign
-          enemy_callsign = j_callsign
+        if fleet_locked and my_board_hash ~= "" and j_hash ~= "" and (is_placeholder_peer(opponent_id) or opponent_id == sender or enemy_callsign == j_callsign) then
+          update_peer_identity(sender, j_hint, "PEER")
           enemy_seed = j_seed
           enemy_board_hash = j_hash
           timer_cancel("seek_broadcast")
 
-          local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+          local payload = string.format("BS|RDY|%s|0|%d|%s|%s", match_id, handshake_seed, my_board_hash, my_callsign)
           mesh_send(opponent_id, payload)
 
           if handshake_seed >= enemy_seed then
@@ -1912,9 +2155,8 @@ function NetEngine.process_packet(sender, text)
         end
 
         -- If Host is still placing ships, remember Challenger's credentials so lock_in_fleet() can RDY immediately
-        if not fleet_locked and j_hash ~= "" and opponent_id == "" then
-          opponent_id = (sender and sender ~= "") and sender or j_callsign
-          enemy_callsign = j_callsign
+        if not fleet_locked and j_hash ~= "" and is_placeholder_peer(opponent_id) then
+          update_peer_identity(sender, j_hint, "PEER")
           enemy_seed = j_seed
           enemy_board_hash = j_hash
           if setup_ship_idx > 5 and #my_ships >= 5 then
@@ -1926,23 +2168,22 @@ function NetEngine.process_packet(sender, text)
           return
         end
 
-        if opponent_id == "" then
+        if is_placeholder_peer(opponent_id) then
           seek_beacon_seq = seek_beacon_seq + 1
           local seek_pkt = string.format("BS|SEEK|%s|%s|%d|%d|%s", match_id, my_callsign, seek_beacon_seq, handshake_seed, my_board_hash)
-          if sender and sender ~= "" then
+          if sender and sender ~= "" and not is_self_sender(sender) then
             mesh_send(sender, seek_pkt)
           else
             mesh_send(GAME_CHANNEL, seek_pkt)
           end
-          combat_log = string.format("> PEER DETECTED (%s). SENT SEEK [%s]...", tostring(sender or "PEER"), match_id)
+          combat_log = string.format("> PEER DETECTED (%s). SENT SEEK [%s]...", tostring(j_callsign or "PEER"), match_id)
           if draw_screen then draw_screen() end
         end
       elseif (game_state == STATE_MY_TURN or game_state == STATE_ENEMY_TURN) and local_seq == 1 then
         -- Recovery: Host is already at Turn 1 (e.g. made a move & waiting for ACK, or waiting for enemy shot)
         -- while Challenger is still stuck at SCANNING #battleship FOR HOST LOBBY (missed BS|RDY or re-joined).
-        if sender == opponent_id or opponent_id == "" or enemy_callsign == j_callsign then
-          opponent_id = (sender and sender ~= "") and sender or j_callsign
-          enemy_callsign = j_callsign
+        if sender == opponent_id or is_placeholder_peer(opponent_id) or enemy_callsign == j_callsign then
+          update_peer_identity(sender, j_hint, "PEER")
           if j_hash ~= "" then enemy_board_hash = j_hash end
           if j_seed > 0 then enemy_seed = j_seed end
 
@@ -1955,7 +2196,7 @@ function NetEngine.process_packet(sender, text)
             combat_log = "> PEER SCANNED: RE-SENT TURN 1 SHOT..."
           else
             -- Host hasn't fired yet; re-send BS|RDY and align Turn 1 state
-            local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+            local payload = string.format("BS|RDY|%s|0|%d|%s|%s", match_id, handshake_seed, my_board_hash, my_callsign)
             mesh_send(opponent_id, payload)
             if handshake_seed >= enemy_seed then
               game_state = STATE_MY_TURN
@@ -1975,13 +2216,18 @@ function NetEngine.process_packet(sender, text)
   end
 
   if ptype == "JOIN" then
+    local j_seed = tonumber(p[5]) or 0
+    local j_hash = (p[6] and not p[6]:match("^R%d+$")) and p[6] or ""
+    local j_hint = (p[7] and p[7] ~= "" and not p[7]:match("^R%d+$")) and p[7] or nil
+    if is_self_sender(j_hint) or (my_board_hash ~= "" and j_hash == my_board_hash and j_seed == handshake_seed) then
+      return
+    end
     if is_host and (p_mid == match_id or match_id == "") then
       -- If Host hasn't locked fleet yet (or is still placing ships), record Challenger and auto-lock if all 5 ships placed
       if game_state == STATE_SETUP and (not fleet_locked or my_board_hash == "") then
-        opponent_id = (sender and sender ~= "") and sender or "PEER"
-        enemy_callsign = opponent_id
+        update_peer_identity(sender, j_hint, "PEER")
         enemy_seed = tonumber(p[5]) or 0
-        enemy_board_hash = p[6] or ""
+        enemy_board_hash = j_hash
         if setup_ship_idx > 5 and #my_ships >= 5 then
           NetEngine.lock_in_fleet()
         else
@@ -1999,14 +2245,13 @@ function NetEngine.process_packet(sender, text)
           if handshake_seed == 0 then handshake_seed = rand_int(1, 999999) end
           fleet_locked = true
         end
-        opponent_id = (sender and sender ~= "") and sender or "PEER"
-        enemy_callsign = opponent_id
+        update_peer_identity(sender, j_hint, "PEER")
         enemy_seed = tonumber(p[5]) or 0
-        enemy_board_hash = p[6] or ""
+        enemy_board_hash = j_hash
         timer_cancel("seek_broadcast")
 
         -- Reply with RDY
-        local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+        local payload = string.format("BS|RDY|%s|0|%d|%s|%s", match_id, handshake_seed, my_board_hash, my_callsign)
         mesh_send(opponent_id, payload)
 
         -- Seed comparison: higher seed fires first
@@ -2023,18 +2268,18 @@ function NetEngine.process_packet(sender, text)
         end
         save_match_state()
         if draw_screen then draw_screen() end
-      elseif (game_state == STATE_MY_TURN or game_state == STATE_ENEMY_TURN) and local_seq == 1 and (sender == opponent_id or opponent_id == "") then
+      elseif (game_state == STATE_MY_TURN or game_state == STATE_ENEMY_TURN) and local_seq == 1 and (sender == opponent_id or is_placeholder_peer(opponent_id)) then
         -- Dropped RDY Fix: Challenger did not receive our initial BS|RDY and is retrying BS|JOIN.
-        if sender and sender ~= "" then opponent_id = sender end
+        update_peer_identity(sender, j_hint, "PEER")
         enemy_seed = tonumber(p[5]) or enemy_seed
-        if p[6] and p[6] ~= "" and not p[6]:match("^R%d+$") then enemy_board_hash = p[6] end
+        if j_hash ~= "" then enemy_board_hash = j_hash end
         if tx_pending and tx_pending.seq == 1 then
           tx_pending.retries = 0
           tx_pending.elapsed = 0
           mesh_send(opponent_id, tx_pending.payload)
           combat_log = "> RE-SENT TURN 1 SHOT TO JOINING PEER..."
         else
-          local payload = string.format("BS|RDY|%s|0|%d|%s", match_id, handshake_seed, my_board_hash)
+          local payload = string.format("BS|RDY|%s|0|%d|%s|%s", match_id, handshake_seed, my_board_hash, my_callsign)
           mesh_send(opponent_id, payload)
           combat_log = "> RE-SENT RDY TO JOINING PEER..."
         end
@@ -2045,13 +2290,27 @@ function NetEngine.process_packet(sender, text)
     return
   end
 
+  -- Check RDY / FIRE self-echo before adopting match_id
+  if ptype == "RDY" then
+    local r_seed = tonumber(p[5]) or 0
+    local r_hash = (p[6] and not p[6]:match("^R%d+$")) and p[6] or ""
+    local r_hint = (p[7] and p[7] ~= "" and not p[7]:match("^R%d+$")) and p[7] or nil
+    if is_self_sender(r_hint) or (my_board_hash ~= "" and r_hash == my_board_hash and r_seed == handshake_seed) then
+      return
+    end
+  elseif ptype == "FIRE" then
+    local f_hash = (p[6] and p[6] ~= "" and not p[6]:match("^R%d+$")) and p[6] or ""
+    local f_seed = tonumber(p[7]) or 0
+    if my_board_hash ~= "" and f_hash == my_board_hash and f_seed == handshake_seed then
+      return
+    end
+  end
+
   -- Allow Joiner in STATE_SETUP to adopt Host's match_id from BS|RDY or Turn 1 BS|FIRE
   if (ptype == "RDY" or (ptype == "FIRE" and tonumber(p[4]) == 1)) and not is_host and game_state == STATE_SETUP and p_mid ~= "" then
     match_id = p_mid
-    if opponent_id == "" and sender and sender ~= "" then
-      opponent_id = sender
-      enemy_callsign = sender
-    end
+    local r_hint = (ptype == "RDY" and p[7] and p[7] ~= "" and not p[7]:match("^R%d+$")) and p[7] or nil
+    update_peer_identity(sender, r_hint, "HOST")
   end
 
   -- Filter packet by match_id for active combat / handshake
@@ -2059,10 +2318,8 @@ function NetEngine.process_packet(sender, text)
 
   if ptype == "RDY" then
     if not is_host and game_state == STATE_SETUP then
-      if opponent_id == "" and sender and sender ~= "" then
-        opponent_id = sender
-        enemy_callsign = sender
-      end
+      local r_hint = (p[7] and p[7] ~= "" and not p[7]:match("^R%d+$")) and p[7] or nil
+      update_peer_identity(sender, r_hint, "HOST")
       enemy_seed = tonumber(p[5]) or 0
       if p[6] and p[6] ~= "" and not p[6]:match("^R%d+$") then
         enemy_board_hash = p[6]
@@ -2093,6 +2350,21 @@ function NetEngine.process_packet(sender, text)
   end
 
   -- 2. Lockstep Combat Phase
+  if ptype == "RES" then
+    local r_hash = (p[8] and p[8] ~= "" and not p[8]:match("^R%d+$")) and p[8] or ""
+    if my_board_hash ~= "" and r_hash ~= "" and r_hash == my_board_hash then
+      return
+    end
+  elseif ptype == "REV" then
+    local rev_salt = p[5] or ""
+    if my_salt ~= "" and rev_salt ~= "" and rev_salt == my_salt then
+      return
+    end
+  end
+
+  -- Always lock onto the real non-self peer sender on any valid match packet (DM or direct)
+  update_peer_identity(sender, nil, nil)
+
   local seq = tonumber(p[4]) or 0
 
   -- Outbound ACK confirmation
@@ -2150,12 +2422,7 @@ function NetEngine.process_packet(sender, text)
         fleet_locked = true
       end
       if p_mid ~= "" then match_id = p_mid end
-      if sender and sender ~= "" then
-        opponent_id = sender
-        enemy_callsign = sender
-      elseif opponent_id == "" then
-        opponent_id = "HOST"
-      end
+      update_peer_identity(sender, nil, "HOST")
       if f_hash ~= "" then enemy_board_hash = f_hash end
       if f_seed > 0 then enemy_seed = f_seed end
 
@@ -2175,10 +2442,6 @@ function NetEngine.process_packet(sender, text)
 
     -- Dropped ACK Fix: Defender receives duplicate FIRE for seq - 1
     if seq == local_seq - 1 and last_sent_res then
-      -- If our DM reply wasn't heard by the attacker, fall back to #battleship channel
-      if not peer_dm_verified then
-        peer_dm_allowed = false
-      end
       mesh_send(opponent_id, last_sent_res.payload)
       combat_log = string.format("> RE-TX LAST RES [Seq %d]...", seq)
       if draw_screen then draw_screen() end
@@ -2459,12 +2722,21 @@ local function draw_metallic_button(x, y, w, h, text, text_col, border_glow)
     box(x + w - roff - 2, y + h - roff - 2, 2, 2, COL_RIVET, nil)
   end
 
-  -- Centered button text with embossed drop shadow
+  -- Centered button text with embossed drop shadow (auto-step down font size if narrow)
   if text and text ~= "" then
     local font_sz = (h >= 45 and s2) and f_lg or ((h >= 32 and s2) and f_md or (s2 and f_sm or 12))
+    local pad_w = s2 and 24 or 10
     local tw_val = tw(text, font_sz)
-    local tx = x + math.max(2, math.floor((w - tw_val) / 2))
-    local ty = y + math.max(1, math.floor((h - th(font_sz)) / 2))
+    if s2 and tw_val > w - pad_w and font_sz > f_md then
+      font_sz = f_md
+      tw_val = tw(text, font_sz)
+    end
+    if s2 and tw_val > w - pad_w and font_sz > f_sm then
+      font_sz = f_sm
+      tw_val = tw(text, font_sz)
+    end
+    local tx = x + math.max(4, math.floor((w - tw_val) / 2))
+    local ty = y + math.max(2, math.floor((h - th(font_sz)) / 2))
     draw_text(tx + 1, ty + 1, text, 0x0A0D12, font_sz)
     draw_text(tx, ty, text, text_col or COL_TEXT_BRIGHT, font_sz)
   end
@@ -2490,17 +2762,20 @@ local function draw_panel_frame(x, y, w, h, title, title_col, border_glow)
   box(x + w - roff - 2, y + h - roff - 2, 2, 2, COL_RIVET, nil)
   -- Header Title Crest Badge atop top panel rim
   if title and title ~= "" then
-    local tsz = s2 and f_sm or 10
+    local tsz = s2 and f_xs or 10
     local tw_val = tw(title, tsz)
-    local tab_w = tw_val + (s2 and 20 or 12)
-    local tab_h = s2 and 16 or 12
+    local th_val = th(tsz)
+    local tab_w = math.min(w - 12, tw_val + (s2 and 36 or 14))
+    local tab_h = s2 and math.max(24, th_val + 6) or 12
     local tab_x = x + math.floor((w - tab_w) / 2)
-    local tab_y = y - tab_h + 1
+    local tab_y = y - tab_h + (s2 and 2 or 1)
+    local tx = tab_x + math.max(4, math.floor((tab_w - tw_val) / 2))
+    local ty = tab_y + math.max(1, math.floor((tab_h - th_val) / 2))
     -- Raised metal tab atop panel rim
     box(tab_x, tab_y, tab_w, tab_h, COL_STEEL_FACE, COL_STEEL_BORDER, 2)
     draw_line(tab_x + 1, tab_y + 1, tab_x + tab_w - 2, tab_y + 1, COL_STEEL_LIGHT, 1)
-    draw_text(tab_x + math.floor((tab_w - tw_val) / 2) + 1, tab_y + (s2 and 2 or 1) + 1, title, 0x05070A, tsz)
-    draw_text(tab_x + math.floor((tab_w - tw_val) / 2), tab_y + (s2 and 2 or 1), title, title_col or COL_TEXT_BRIGHT, tsz)
+    draw_text(tx + 1, ty + 1, title, 0x05070A, tsz)
+    draw_text(tx, ty, title, title_col or COL_TEXT_BRIGHT, tsz)
   end
 end
 
@@ -2596,7 +2871,7 @@ local function draw_top_bar()
     state_text = "[GRID STRIKE]"
     state_col  = COL_TEXT_BRIGHT
   end
-  local ty = s2 and 5 or 3
+  local ty = s2 and math.max(2, math.floor((top_h - th(f_sm)) / 2)) or 3
   draw_text(s2 and 16 or 6, ty, state_text, state_col, f_sm)
 
   -- Lockstep telemetry & retry counter (Center-Right)
@@ -2625,7 +2900,7 @@ local function draw_top_bar()
   local pip_h = s2 and 12 or 6
   local pip_gap = s2 and 13 or 7
   local pips_x = s2 and (W - 85) or 282
-  local pips_y = s2 and 8 or 6
+  local pips_y = s2 and math.floor((top_h - pip_h) / 2) or 6
   for i = 1, 5 do
     local is_damaged = (my_ship_hits[i] or 0) >= SHIP_SPECS[i].len
     local pip_col = is_damaged and COL_HIT or COL_OWN_FLEET
@@ -2736,7 +3011,7 @@ local function draw_home_fleet()
   end
 end
 
--- Draw Side Panel: Tactical Command & Action Controls (T-Display P4 Landscape)
+-- Draw Side Panel: Tactical Command & Action Controls (T-Display P4 & CrowPanel Landscape)
 local function draw_side_controls()
   if not s2 or side_panel.w <= 0 then return end
   local sx, sy, sw, sh = side_panel.x, side_panel.y, side_panel.w, side_panel.h
@@ -2745,9 +3020,11 @@ local function draw_side_controls()
 
   -- Target Coordinate Info
   box(sx + 14, sy + 14, sw - 28, 48, COL_BAR_BG, COL_STEEL_BORDER, 4)
-  draw_text(sx + 24, sy + 20, "TARGET AIM:", COL_TEXT_DIM, f_xs)
+  local lbl_y = sy + 14 + math.floor((48 - th(f_xs)) / 2)
+  local aim_y = sy + 14 + math.floor((48 - th(f_lg)) / 2)
+  draw_text(sx + 22, lbl_y, "TARGET AIM:", COL_TEXT_DIM, f_xs)
   local aim_str = format_coord(target_cur_x, target_cur_y)
-  draw_text(sx + 24 + tw("TARGET AIM: ", f_xs), sy + 18, aim_str, COL_RETICLE, f_lg)
+  draw_text(sx + 22 + tw("TARGET AIM:", f_xs) + 10, aim_y, aim_str, COL_RETICLE, f_lg)
 
   -- Big Metallic Touch FIRE Button
   local fire_btn_y = sy + 70
@@ -2761,10 +3038,11 @@ local function draw_side_controls()
   -- Match Telemetry Box
   local tel_y = fire_btn_y + fire_btn_h + 12
   box(sx + 14, tel_y, sw - 28, 100, COL_BAR_BG, COL_STEEL_BORDER, 4)
-  draw_text(sx + 24, tel_y + 12, "MATCH ID: " .. (match_id ~= "" and match_id or "NONE"), COL_TEXT_BRIGHT, f_xs)
-  draw_text(sx + 24, tel_y + 34, "PEER: " .. (is_ai_match and "OFFLINE AI" or enemy_callsign), COL_STATUS_AMBER, f_xs)
-  draw_text(sx + 24, tel_y + 56, "COMMS: " .. (peer_dm_verified and "DIRECT (DM)" or "#battleship"), COL_STATUS_GREEN, f_xs)
-  draw_text(sx + 24, tel_y + 78, "FLEET LOSSES: " .. tostring(my_sunk_count) .. " / 5 SUNK", my_sunk_count > 0 and COL_HIT or COL_STATUS_GREEN, f_xs)
+  local peer_str = is_ai_match and "OFFLINE AI" or tostring(enemy_callsign or "PEER"):sub(1, 12)
+  draw_text(sx + 22, tel_y + 8,  "MATCH ID: " .. (match_id ~= "" and match_id or "NONE"), COL_TEXT_BRIGHT, f_xs)
+  draw_text(sx + 22, tel_y + 30, "PEER: " .. peer_str, COL_STATUS_AMBER, f_xs)
+  draw_text(sx + 22, tel_y + 52, "COMMS: " .. (is_ai_match and "LOCAL CPU" or "DIRECT (DM)"), COL_STATUS_GREEN, f_xs)
+  draw_text(sx + 22, tel_y + 74, "LOSSES: " .. tostring(my_sunk_count) .. " / 5 SUNK", my_sunk_count > 0 and COL_HIT or COL_STATUS_GREEN, f_xs)
 
   -- Mute Button / Quick Sound Toggle (Metallic)
   local snd_btn_y = tel_y + 112
@@ -2775,9 +3053,9 @@ local function draw_side_controls()
 
   -- Return to Lobby Button on Game Over
   if game_state == STATE_GAME_OVER or game_state == STATE_AUDIT then
-    local ret_y = snd_btn_y + snd_btn_h + 10
-    local ret_h = math.min(50, sh - (ret_y - sy) - 10)
-    if ret_h >= 36 then
+    local ret_y = snd_btn_y + snd_btn_h + 8
+    local ret_h = math.min(50, sh - (ret_y - sy) - 8)
+    if ret_h >= 32 then
       draw_metallic_button(sx + 14, ret_y, sw - 28, ret_h, "MAIN MENU", COL_STATUS_GREEN, COL_STATUS_GREEN)
     end
   end
@@ -2859,19 +3137,41 @@ local function draw_setup_screen()
 
   draw_panel_frame(rx, ry, rw, rh, "FLEET STATUS", COL_STATUS_GREEN)
 
-  local sy = ry + (s2 and 12 or 5)
-  local row_gap = s2 and 28 or 13
-  for i = 1, 5 do
-    local spec = SHIP_SPECS[i]
-    local placed = (my_ships[i] ~= nil)
-    local is_cur = (setup_ship_idx == i)
+  if s2 then
+    local row_h = 48
+    local row_gap = 58
+    for i = 1, 5 do
+      local spec = SHIP_SPECS[i]
+      local placed = (my_ships[i] ~= nil)
+      local is_cur = (setup_ship_idx == i)
+      local row_y = ry + 18 + (i - 1) * row_gap
+      local row_bcol = is_cur and COL_RETICLE or (placed and COL_OWN_FLEET_DK or COL_STEEL_BORDER)
+      box(rx + 14, row_y, rw - 28, row_h, COL_BAR_BG, row_bcol, 4)
 
-    local txt = string.format("%d.%s(%d)", i, spec.abbr, spec.len)
-    local col = placed and COL_OWN_FLEET or (is_cur and COL_RETICLE or COL_TEXT_DIM)
-    draw_text(rx + 8, sy, txt, col, s2 and f_md or 12)
-    local status_mark = placed and "[OK]" or (is_cur and "[AIM]" or "[..]")
-    draw_text(rx + rw - (s2 and 54 or 34), sy, status_mark, col, s2 and f_md or 12)
-    sy = sy + row_gap
+      local txt = string.format("%d. %s (%d)", i, spec.name:upper(), spec.len)
+      local col = placed and COL_OWN_FLEET or (is_cur and COL_RETICLE or COL_TEXT_DIM)
+      local ty = row_y + math.floor((row_h - th(f_sm)) / 2)
+      draw_text(rx + 24, ty, txt, col, f_sm)
+
+      local status_mark = placed and "[OK]" or (is_cur and "[AIM]" or "[..]")
+      local sm_w = tw(status_mark, f_sm)
+      draw_text(rx + rw - 24 - sm_w, ty, status_mark, col, f_sm)
+    end
+  else
+    local sy = ry + 5
+    local row_gap = 13
+    for i = 1, 5 do
+      local spec = SHIP_SPECS[i]
+      local placed = (my_ships[i] ~= nil)
+      local is_cur = (setup_ship_idx == i)
+
+      local txt = string.format("%d.%s(%d)", i, spec.abbr, spec.len)
+      local col = placed and COL_OWN_FLEET or (is_cur and COL_RETICLE or COL_TEXT_DIM)
+      draw_text(rx + 8, sy, txt, col, 12)
+      local status_mark = placed and "[OK]" or (is_cur and "[AIM]" or "[..]")
+      draw_text(rx + rw - 34, sy, status_mark, col, 12)
+      sy = sy + row_gap
+    end
   end
 
   if not s2 then
@@ -2891,7 +3191,7 @@ local function draw_setup_screen()
       draw_metallic_button(btn_x, ry + 77, btn_w, 36, "CONFIRM", COL_STATUS_GREEN, COL_STATUS_GREEN)
     end
   else
-    -- High-DPI / Wide screen (T-Display P4): Dedicated Side Action Panel
+    -- High-DPI / Wide screen (T-Display P4 & CrowPanel Advanced): Dedicated Side Action Panel
     local sx, ss_y, sw, sh = side_panel.x, side_panel.y, side_panel.w, side_panel.h
     draw_panel_frame(sx, ss_y, sw, sh, "DEPLOYMENT", COL_STATUS_GREEN)
 
@@ -2899,11 +3199,11 @@ local function draw_setup_screen()
     box(sx + 14, ss_y + 14, sw - 28, 56, COL_BAR_BG, COL_STEEL_BORDER, 4)
     if setup_ship_idx <= 5 then
       local spec = SHIP_SPECS[setup_ship_idx]
-      draw_text(sx + 24, ss_y + 20, "CURRENT SHIP:", COL_TEXT_DIM, f_xs)
-      draw_text(sx + 24, ss_y + 38, string.format("%s (LEN: %d)", spec.name:upper(), spec.len), COL_RETICLE, f_md)
+      draw_text(sx + 22, ss_y + 19, "CURRENT SHIP:", COL_TEXT_DIM, f_xs)
+      draw_text(sx + 22, ss_y + 41, string.format("%s (LEN: %d)", spec.name:upper(), spec.len), COL_RETICLE, f_sm)
     else
-      draw_text(sx + 24, ss_y + 20, "FLEET STATUS:", COL_TEXT_DIM, f_xs)
-      draw_text(sx + 24, ss_y + 38, "ALL 5 SHIPS READY!", COL_STATUS_GREEN, f_md)
+      draw_text(sx + 22, ss_y + 19, "FLEET STATUS:", COL_TEXT_DIM, f_xs)
+      draw_text(sx + 22, ss_y + 41, "ALL 5 SHIPS READY!", COL_STATUS_GREEN, f_sm)
     end
 
     -- Touch Button 1: Rotate Direction (Metallic)
@@ -2938,19 +3238,19 @@ local function draw_setup_screen()
   draw_line(0, bot_y, W, bot_y, COL_STEEL_BORDER, 1)
   draw_line(0, bot_y + 1, W, bot_y + 1, COL_STEEL_DARK, 1)
 
-  local y1 = bot_y + (s2 and 8 or 4)
-  local y2 = bot_y + (s2 and 26 or 20)
+  local y1 = bot_y + (s2 and 6 or 4)
+  local y2 = bot_y + (s2 and 28 or 20)
   local f_bar = s2 and f_sm or 12
 
   if fleet_locked then
     draw_text(s2 and 16 or 10, y1, combat_log, COL_STATUS_AMBER, f_bar)
-    draw_text(s2 and 16 or 10, y2, "[Enter] Ping   [C] Unlock", COL_TEXT_BRIGHT, f_bar)
+    draw_text(s2 and 16 or 10, y2, s2 and "Tap [HOSTING/SEEKING] to Ping  |  Tap [UNLOCK FLEET]" or "[Enter] Ping   [C] Unlock", COL_TEXT_BRIGHT, f_bar)
   elseif setup_ship_idx <= 5 then
     draw_text(s2 and 16 or 10, y1, string.format("PLACING: %s (LEN %d)", SHIP_SPECS[setup_ship_idx].name, SHIP_SPECS[setup_ship_idx].len), COL_RETICLE, f_bar)
-    draw_text(s2 and 16 or 10, y2, "[WASD] Aim/Place  [R] Rot", COL_TEXT_BRIGHT, f_bar)
+    draw_text(s2 and 16 or 10, y2, s2 and "Tap Grid to Place Ship  |  Tap [ROTATE] / [RESET]" or "[WASD] Aim/Place  [R] Rot", COL_TEXT_BRIGHT, f_bar)
   else
     draw_text(s2 and 16 or 10, y1, "FLEET READY! DEPLOY TO BATTLE.", COL_STATUS_GREEN, f_bar)
-    draw_text(s2 and 16 or 10, y2, "[Enter] CONFIRM   [C] Reset", COL_TEXT_BRIGHT, f_bar)
+    draw_text(s2 and 16 or 10, y2, s2 and "Tap [LAUNCH BATTLE] to Deploy  |  Tap [RESET FLEET]" or "[Enter] CONFIRM   [C] Reset", COL_TEXT_BRIGHT, f_bar)
   end
 
   -- Bottom-right Menu button
@@ -2963,14 +3263,14 @@ local function draw_bottom_bar()
   draw_line(0, bot_y, W, bot_y, COL_STEEL_BORDER, 1)
   draw_line(0, bot_y + 1, W, bot_y + 1, COL_STEEL_DARK, 1)
 
-  local text_y1 = bot_y + (s2 and 8 or 4)
-  local text_y2 = bot_y + (s2 and 26 or 20)
+  local text_y1 = bot_y + (s2 and 6 or 4)
+  local text_y2 = bot_y + (s2 and 28 or 20)
   local f_bar = s2 and f_sm or 12
 
   if game_state == STATE_AUDIT or game_state == STATE_GAME_OVER then
     local banner_col = audit_passed and COL_STATUS_GREEN or COL_HIT
     draw_text(s2 and 16 or 10, text_y1, audit_status_msg, banner_col, f_bar)
-    draw_text(s2 and 16 or 10, text_y2, "[Enter] Main Menu  [M] Mute", COL_RETICLE, f_bar)
+    draw_text(s2 and 16 or 10, text_y2, s2 and "Tap [MAIN MENU] or [Menu] to Continue" or "[Enter] Main Menu  [M] Mute", COL_RETICLE, f_bar)
     draw_menu_button()
     return
   end
@@ -2978,16 +3278,20 @@ local function draw_bottom_bar()
   -- Combat log / action status line
   draw_text(s2 and 16 or 10, text_y1, combat_log, COL_TEXT_BRIGHT, f_bar)
 
-  -- Contextual key hints
+  -- Contextual key / touch hints
   local hints = ""
   if game_state == STATE_MY_TURN then
     if tx_pending ~= nil then
-      hints = "[WAITING FOR ACK]  [M] Mute"
+      hints = s2 and "[WAITING FOR ACK]  |  Tap [SOUND] Mute" or "[WAITING FOR ACK]  [M] Mute"
     else
-      hints = string.format("[WASD] Aim (%s)  [Ent] Fire [M]", format_coord(target_cur_x, target_cur_y))
+      if s2 then
+        hints = string.format("Tap Target Radar or [FIRE: %s]  |  Tap [SOUND] Mute", format_coord(target_cur_x, target_cur_y))
+      else
+        hints = string.format("[WASD] Aim (%s)  [Ent] Fire [M]", format_coord(target_cur_x, target_cur_y))
+      end
     end
   elseif game_state == STATE_ENEMY_TURN then
-    hints = "[DEFENDING] Enemy turn... [M]"
+    hints = s2 and "[DEFENDING] Enemy turn... Tap Radar to Pre-Aim" or "[DEFENDING] Enemy turn... [M]"
   end
   draw_text(s2 and 16 or 10, text_y2, hints, COL_RETICLE, f_bar)
 
@@ -3141,7 +3445,7 @@ local function draw_resume_modal()
 
     box(0, bot_y, W, bot_h, COL_BAR_BG, nil)
     draw_line(0, bot_y, W, bot_y, COL_STEEL_BORDER, 1)
-    draw_text(24, bot_y + 16, "Press [1]/[Enter] to Resume, [2] to Abandon", COL_TEXT_BRIGHT, f_sm)
+    draw_text(24, bot_y + 16, "Tap [RESUME] to Continue Match, or [ABANDON]", COL_TEXT_BRIGHT, f_sm)
     draw_menu_button()
   else
     local mx, my, mw, mh = 20, 32, 280, 140
@@ -3319,6 +3623,9 @@ function app.on_key(key)
 
         combat_log = string.format("> MATCH RESUMED [ID:%s | SEQ:%02d]", match_id, local_seq)
         is_ai_match = (recovered.opponent_id == "AI_BOT")
+        if not is_ai_match and is_self_sender(opponent_id) then
+          opponent_id = (not is_placeholder_peer(enemy_callsign)) and enemy_callsign or ""
+        end
         if is_ai_match then
           tx_pending = nil
           if game_state == STATE_ENEMY_TURN then
@@ -3354,8 +3661,6 @@ function app.on_key(key)
         tx_pending.elapsed = 0
         tx_pending.next_wait = 6000
         tx_pending.waiting_pace = false
-        peer_dm_verified = false
-        peer_dm_allowed = false
         local ok, err = mesh_send(opponent_id, tx_pending.payload)
         if (not ok and (err == "too fast" or err == "rate limited")) or (ok and err == "paced") then
           tx_pending.waiting_pace = true
@@ -3522,9 +3827,7 @@ function app.on_key(key)
   -- 6. Game Over / Audit Screen Inputs
   if game_state == STATE_AUDIT or game_state == STATE_GAME_OVER then
     if k == "enter" or k == "space" or k == "q" or k == "escape" then
-      clear_match_state()
-      game_state = STATE_LOBBY
-      draw_screen()
+      return_to_lobby()
     end
     return
   end
@@ -3557,14 +3860,18 @@ function app.on_input(ev)
       end
     end
 
-    -- Audio toggle tap (Top right or side panel sound button)
+    -- Audio toggle tap (Top right bar, or Side Panel sound button during Combat/Audit/GameOver)
     local is_vol_tap = false
+    local in_combat_side = (not show_retry_modal) and
+                           (game_state == STATE_MY_TURN or game_state == STATE_ENEMY_TURN or
+                            game_state == STATE_AUDIT or game_state == STATE_GAME_OVER)
     if s2 then
-      is_vol_tap = (ty <= top_h and tx >= W - 200) or
-                   (side_panel.w > 0 and tx >= side_panel.x + 14 and tx <= side_panel.x + side_panel.w - 14 and
+      is_vol_tap = (game_state ~= STATE_RESUME_MODAL and ty <= top_h and tx >= W - 200) or
+                   (in_combat_side and side_panel.w > 0 and
+                    tx >= side_panel.x + 14 and tx <= side_panel.x + side_panel.w - 14 and
                     ty >= side_panel.y + 248 and ty <= side_panel.y + 292)
     else
-      is_vol_tap = (ty <= 24 and tx >= 230)
+      is_vol_tap = (game_state ~= STATE_RESUME_MODAL and ty <= 24 and tx >= 230)
     end
     if is_vol_tap then
       sound_on = not sound_on
@@ -3595,7 +3902,7 @@ function app.on_input(ev)
         if ty >= 105 and ty <= 145 then
           if tx >= 30 and tx <= 145 then
             app.on_key("1")
-          elseif tx >= 165 and tx <= 280 then
+          elseif tx >= 155 and tx <= 280 then
             app.on_key("2")
           end
         elseif is_tb_center then
@@ -3625,7 +3932,7 @@ function app.on_input(ev)
         if ty >= 105 and ty <= 145 then
           if tx >= 30 and tx <= 155 then
             app.on_key("1")
-          elseif tx >= 165 and tx <= 290 then
+          elseif tx >= 155 and tx <= 290 then
             app.on_key("2")
           end
         elseif is_tb_center then
@@ -3657,11 +3964,18 @@ function app.on_input(ev)
 
     -- Fleet Placement Taps (Deployment Grid, Right Panel, Bottom Bar, Trackball Press)
     if game_state == STATE_SETUP then
-      -- Side Controls on P4 (s2)
+      -- Side Controls on P4 & CrowPanel Advanced (s2)
       if s2 and side_panel.w > 0 and tx >= side_panel.x and tx <= side_panel.x + side_panel.w then
         local sy = side_panel.y
         if fleet_locked then
-          if ty >= sy + 210 and ty <= sy + 270 then
+          if ty >= sy + 146 and ty <= sy + 198 then
+            -- Reset Fleet while locked: unlock and clear board
+            fleet_locked = false
+            timer_cancel("seek_broadcast")
+            NetEngine.clear_tx(true)
+            app.on_key("c")
+            return
+          elseif ty >= sy + 210 and ty <= sy + 270 then
             NetEngine.lock_in_fleet() -- Ping
             return
           elseif ty >= sy + 282 and ty <= sy + 330 then
@@ -3677,11 +3991,12 @@ function app.on_input(ev)
             return
           elseif ty >= sy + 210 and ty <= sy + 270 then
             if setup_ship_idx > 5 then
-              app.on_key("enter") -- Confirm
+              app.on_key("enter") -- Launch Battle
             end
             return
           end
         end
+        return
       end
 
       if fleet_locked then
@@ -3713,8 +4028,12 @@ function app.on_input(ev)
       elseif tx >= gx and tx < gx + span and ty >= gy and ty < gy + span then
         local cell_x = math.floor((tx - gx) / cell_sz)
         local cell_y = math.floor((ty - gy) / cell_sz)
-        setup_cur_x = clamp(cell_x, 0, 9)
-        setup_cur_y = clamp(cell_y, 0, 9)
+        local spec = SHIP_SPECS[setup_ship_idx]
+        local len = (spec and spec.len) or 1
+        local max_x = (setup_dir == "H") and (10 - len) or 9
+        local max_y = (setup_dir == "V") and (10 - len) or 9
+        setup_cur_x = clamp(cell_x, 0, max_x)
+        setup_cur_y = clamp(cell_y, 0, max_y)
         app.on_key("enter")
         return
       elseif not s2 and ty >= home_panel.y + 73 and ty <= home_panel.y + home_panel.h and tx >= home_panel.x and tx <= home_panel.x + home_panel.w then
@@ -3724,41 +4043,49 @@ function app.on_input(ev)
         app.on_key("enter")
         return
       end
+      return
     end
 
     -- Target Radar Taps (Aim and Fire)
     if (game_state == STATE_MY_TURN or game_state == STATE_ENEMY_TURN) then
-      -- Check Side Panel Touch Fire button on P4 (s2)
+      -- Check Side Panel Touch Fire button on P4 & CrowPanel Advanced (s2)
       if s2 and side_panel.w > 0 and tx >= side_panel.x + 14 and tx <= side_panel.x + side_panel.w - 14 then
         local sy = side_panel.y
         -- Fire button: sy + 70 .. sy + 124
-        if ty >= sy + 70 and ty <= sy + 124 and game_state == STATE_MY_TURN and tx_pending == nil then
-          NetEngine.fire_shot(target_cur_x, target_cur_y)
+        if ty >= sy + 70 and ty <= sy + 124 then
+          if game_state == STATE_MY_TURN and tx_pending == nil then
+            NetEngine.fire_shot(target_cur_x, target_cur_y)
+          end
           return
         end
       end
 
-      if game_state == STATE_MY_TURN and tx_pending == nil then
-        local gx = target_panel.x + 2
-        local gy = target_panel.y + 2
-        local span = cell_sz * 10
-        if is_tb_center then
+      local gx = target_panel.x + 2
+      local gy = target_panel.y + 2
+      local span = cell_sz * 10
+      if is_tb_center then
+        if game_state == STATE_MY_TURN and tx_pending == nil then
           NetEngine.fire_shot(target_cur_x, target_cur_y)
-          return
-        elseif tx >= gx and tx < gx + span and ty >= gy and ty < gy + span then
-          local cell_x = math.floor((tx - gx) / cell_sz)
-          local cell_y = math.floor((ty - gy) / cell_sz)
-          target_cur_x = clamp(cell_x, 0, 9)
-          target_cur_y = clamp(cell_y, 0, 9)
-          NetEngine.fire_shot(target_cur_x, target_cur_y)
-          return
         end
+        return
+      elseif tx >= gx and tx < gx + span and ty >= gy and ty < gy + span then
+        local cell_x = math.floor((tx - gx) / cell_sz)
+        local cell_y = math.floor((ty - gy) / cell_sz)
+        target_cur_x = clamp(cell_x, 0, 9)
+        target_cur_y = clamp(cell_y, 0, 9)
+        if game_state == STATE_MY_TURN and tx_pending == nil then
+          NetEngine.fire_shot(target_cur_x, target_cur_y)
+        else
+          sfx_play("BEEP")
+          draw_screen()
+        end
+        return
       end
     end
 
-    -- Return to Lobby Tap on Game Over
+    -- Return to Lobby Tap on Game Over / Audit
     if game_state == STATE_AUDIT or game_state == STATE_GAME_OVER then
-      app.on_key("enter")
+      return_to_lobby()
       return
     end
   end
@@ -3772,20 +4099,25 @@ function app.on_message(m)
   local sender = m.from or m.sender or ""
   local text = m.text or m.payload or ""
 
-  -- If message arrived over a channel, verify it is on #battleship (or legacy fallback)
-  if m.kind == "channel" and m.channel and m.channel ~= "" then
-    local ch = m.channel:lower()
-    local target = GAME_CHANNEL:lower()
-    local raw_target = target:gsub("^#", "")
-    local alt_target = ALT_GAME_CHANNEL:lower()
-    local raw_alt = alt_target:gsub("^#", "")
-    if ch ~= target and ch ~= raw_target and ch ~= ("#" .. raw_target)
-       and ch ~= alt_target and ch ~= raw_alt and ch ~= ("#" .. raw_alt)
-       and ch ~= "public" then
+  -- Channel #battleship is strictly for Hosting & Joining (SEEK, JOIN_SEEK, JOIN, RDY, ACK 0).
+  -- Gameplay packets (FIRE, RES, ACK > 0, REV, SYNC) are never accepted from a channel.
+  if m.kind == "channel" then
+    if m.channel and m.channel ~= "" then
+      local ch = m.channel:lower()
+      local target = GAME_CHANNEL:lower()
+      local raw_target = target:gsub("^#", "")
+      local alt_target = ALT_GAME_CHANNEL:lower()
+      local raw_alt = alt_target:gsub("^#", "")
+      if ch ~= target and ch ~= raw_target and ch ~= ("#" .. raw_target)
+         and ch ~= alt_target and ch ~= raw_alt and ch ~= ("#" .. raw_alt)
+         and ch ~= "public" then
+        return
+      end
+    end
+    if not is_handshake_packet(text) then
       return
     end
   elseif m.kind == "dm" and text:sub(1, 3) == "BS|" then
-    -- Peer successfully delivered a direct message to us (both nodes have DM permissions & contacts)
     peer_dm_verified = true
     peer_dm_allowed = true
   end

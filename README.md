@@ -4,7 +4,7 @@
 
 # Grid Strike: 1v1 LoRa Naval Combat for WADAMESH (Lua 5.4) — v1.0
 
-A high-contrast, tactical naval radar combat game (**Grid Strike**) designed for the **LilyGo T-Deck Plus** (ESP32-S3) and **LilyGo T-Display P4** (AMOLED/LCD) using the on-device **WADAMESH Lua App SDK (`wada.*` API v1)**.
+A high-contrast, tactical naval radar combat game (**Grid Strike**) designed for the **LilyGo T-Deck Plus** (ESP32-S3), **LilyGo T-Display P4** (AMOLED/LCD), and **Elecrow CrowPanel Advanced** (9-inch & 10.1-inch touchscreen-only) using the on-device **WADAMESH Lua App SDK (`wada.*` API v1)**.
 
 Grid Strike implements a full 1v1 multiplayer loop over LoRa mesh featuring **strict lockstep turn-based combat with explicit ACK handshakes**, a **salted commit-reveal anti-cheat audit**, **crash recovery persistence**, and **tactile screen-shake / audio feedback**. It also includes a smart offline **Hunt/Target AI** mode for solo play.
 
@@ -53,8 +53,9 @@ Grid Strike implements a full 1v1 multiplayer loop over LoRa mesh featuring **st
 | Device | Display Resolution | Layout Mode | Cell Size | Radar Dimensions | Input Support |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **LilyGo T-Deck Plus** | `320 × 240` (Native) | Split Landscape | `14 × 14` px | Two `144 × 144` px panels | Physical Keyboard, Trackball, Touchscreen |
-| **LilyGo T-Display P4 (LCD)** | `1168 × 474` | Wide Landscape (Forced) | `32 × 32` px | Two `324 × 324` px panels + Side Panel | Touchscreen, Touch Buttons |
-| **LilyGo T-Display P4 (AMOLED)** | `1232 × 502` | Wide Landscape (Forced) | `34 × 34` px | Two `344 × 344` px panels + Side Panel | Touchscreen, Touch Buttons |
+| **LilyGo T-Display P4 (LCD)** | `1168 × 474` | Wide Landscape (Forced) | `36 × 36` px | Two `364 × 364` px panels + Side Panel | Touchscreen, Touch Buttons |
+| **LilyGo T-Display P4 (AMOLED)** | `1232 × 502` | Wide Landscape (Forced) | `36 × 36` px | Two `364 × 364` px panels + Side Panel | Touchscreen, Touch Buttons |
+| **Elecrow CrowPanel Advanced 9" & 10.1"** | `1024 × 600` (`1024 × 578` body) | Wide Landscape (Forced) | `34 × 34` px | Two `344 × 344` px panels + `260px` Side Panel | Touchscreen-Only (GT911), Touch Buttons |
 
 ---
 
@@ -74,7 +75,7 @@ Deploy the standard 5 naval warships:
 4. **Submarine** (Length 3, `SS`)
 5. **Destroyer** (Length 2, `DD`)
 
-Controls: Use `WASD` / Arrow keys to position the ghost preview, `R` to rotate between Horizontal and Vertical, `Enter` / `Space` to lock placement, or press `A` to auto-deploy a valid fleet instantly.
+Controls: Tap any cell on the `10 × 10` Deployment Grid (or use `WASD` / Arrow keys + `Enter` / `Space`), tap **DIR: HORIZ/VERT (ROTATE)** (or press `R`) to rotate between Horizontal and Vertical, tap **RESET FLEET** (or press `C`) to reset, and tap **LAUNCH BATTLE** to deploy. Tapping near the right or bottom grid edge automatically clamps the ship inside the `10 × 10` board.
 
 ### 3. Compact LoRa Wire Protocol & Lockstep Handshake
 Airtime is scarce; packets are formatted as terse pipe-delimited strings prefixed with `BS|` and `<match_id>`:
@@ -132,15 +133,15 @@ Prevents modified clients from lying about hit results or moving ships mid-game:
 
 | Input | Context | Action |
 | :--- | :--- | :--- |
-| **Touchscreen** | Combat | Tap any cell on Target Radar to aim reticle and fire |
-| **Touchscreen** | Setup | Tap Deployment Grid to position and place current warship |
-| **Touchscreen** | Global | Tap top-right corner (`[VOL]` / `[MUTE]`) to toggle audio |
+| **Touchscreen** | Lobby | Tap **Host**, **Join**, or **VS AI** metallic button |
+| **Touchscreen** | Setup | Tap Deployment Grid to place current ship (auto-clamps at board edges); tap **ROTATE**, **RESET FLEET**, or **LAUNCH BATTLE** on Side Panel |
+| **Touchscreen** | Combat | Tap any cell on Target Radar to aim/fire (or pre-aim during enemy turn) or tap **FIRE** button on Side Panel |
+| **Touchscreen** | Global | Tap top-right corner (`[VOL]` / `[MUTE]`) or Side Panel **SOUND** button to toggle audio |
 | **Menu Button** | Bottom-Right (All non-Lobby screens) | Return immediately to Main Menu / Lobby |
 | **`WASD` / Arrows** | Combat / Setup | Move aiming reticle / position ship preview |
 | **`Enter` / `Space`** | Combat | Fire torpedo at reticle coordinates |
 | **`Enter` / `Space`** | Setup | Confirm placement of current ship |
 | **`R`** | Setup | Rotate warship orientation (Horizontal $\leftrightarrow$ Vertical) |
-| **`A`** | Setup | Auto-deploy all 5 ships in random valid configuration |
 | **`C`** | Setup | Clear placed ships and restart deployment |
 | **`M`** | Global | Toggle sound effects on/off |
 | **`1` / `2` / `3`** | Lobby | Host Match (`1`), Join Match (`2`), Play vs Offline AI (`3`) |
